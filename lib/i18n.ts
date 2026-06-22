@@ -47,6 +47,8 @@ const translations = {
     you: " (You)",
     teamKicker: "Team",
     inviteOthers: "Share the code to invite others!",
+    inviteEmptyTitle: "No one else is here yet",
+    inviteEmptyMessage: "You can invite people with code %{code}.",
     
     // Alerts
     sendAlertTitle: "Send Urgent Alert",
@@ -117,6 +119,8 @@ const translations = {
     you: " (Sen)",
     teamKicker: "Takım",
     inviteOthers: "Kod paylaşarak başkalarını davet et!",
+    inviteEmptyTitle: "Takımda henüz kimse yok",
+    inviteEmptyMessage: "İnsanları %{code} kodu ile davet edebilirsin.",
     
     sendAlertTitle: "Acil Alarm Gönder",
     selectTarget: "Kime:",
@@ -184,6 +188,8 @@ const translations = {
     you: " (Du)",
     teamKicker: "Team",
     inviteOthers: "Teile den Code, um andere einzuladen!",
+    inviteEmptyTitle: "Noch niemand anderes ist hier",
+    inviteEmptyMessage: "Du kannst Personen mit dem Code %{code} einladen.",
     
     sendAlertTitle: "Dringenden Alarm senden",
     selectTarget: "Ziel:",
@@ -251,6 +257,8 @@ const translations = {
     you: " (Toi)",
     teamKicker: "Équipe",
     inviteOthers: "Partagez le code pour inviter !",
+    inviteEmptyTitle: "Personne d'autre n'est encore ici",
+    inviteEmptyMessage: "Vous pouvez inviter des personnes avec le code %{code}.",
     
     sendAlertTitle: "Envoyer une Alerte",
     selectTarget: "Pour:",

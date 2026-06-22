@@ -5,6 +5,11 @@ import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
+import * as Notifications from "expo-notifications";
+import * as Localization from "expo-localization";
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
+import * as Brightness from "expo-brightness";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { registerForPushNotificationsAsync } from "./lib/pushNotifications";
 import {
   ActivityIndicator,
@@ -23,6 +28,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useColorScheme,
   Vibration,
   View
 } from "react-native";
@@ -42,52 +48,138 @@ type LocalTeam = DbTeam & {
 
 const DEVICE_ID_KEY = "@acilping/device_id";
 const SAVED_TEAMS_KEY = "@acilping/saved_teams";
+const ALARM_KEEP_AWAKE_TAG = "acilping-active-alarm";
 
 const TEAM_COLORS = [
-  { bg: "#451a03", icon: "#f59e0b" }, // Amber
-  { bg: "#14532d", icon: "#22c55e" }, // Green
-  { bg: "#164e63", icon: "#06b6d4" }, // Cyan
-  { bg: "#1e3a8a", icon: "#3b82f6" }, // Blue
-  { bg: "#312e81", icon: "#6366f1" }, // Indigo
-  { bg: "#4c1d95", icon: "#8b5cf6" }, // Violet
-  { bg: "#701a75", icon: "#d946ef" }, // Fuchsia
-  { bg: "#831843", icon: "#f43f5e" }, // Rose
-  { bg: "#7f1d1d", icon: "#ef4444" }, // Red
-  { bg: "#7c2d12", icon: "#f97316" }, // Orange
+  { bg: "#f1eee7", icon: "#4b5563" },
+  { bg: "#ece7dc", icon: "#525252" },
+  { bg: "#f5f1e9", icon: "#57534e" },
+  { bg: "#eee9df", icon: "#44403c" },
+  { bg: "#f7f3ea", icon: "#3f3f46" },
+  { bg: "#e9e4d8", icon: "#52525b" },
+  { bg: "#f3eee4", icon: "#57534e" },
+  { bg: "#ebe6dc", icon: "#44403c" },
+  { bg: "#f4efe6", icon: "#3f3f46" },
+  { bg: "#eee7da", icon: "#525252" },
 ];
 
-function getTeamColor(code: string) {
-  let hash = 0;
-  for (let i = 0; i < code.length; i++) {
-    hash = code.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const index = Math.abs(hash) % TEAM_COLORS.length;
-  return TEAM_COLORS[index];
+const DARK_TEAM_COLORS = [
+  { bg: "#27231f", icon: "#d6d3ca" },
+  { bg: "#2f2a23", icon: "#e7e0d3" },
+  { bg: "#25211d", icon: "#d6d3ca" },
+  { bg: "#302922", icon: "#e7e0d3" },
+  { bg: "#29241f", icon: "#d6d3ca" },
+  { bg: "#332b24", icon: "#e7e0d3" },
+  { bg: "#28231e", icon: "#d6d3ca" },
+  { bg: "#302821", icon: "#e7e0d3" },
+  { bg: "#2a241f", icon: "#d6d3ca" },
+  { bg: "#342c24", icon: "#e7e0d3" },
+];
+
+function getTeamColor(code: string, isDark = false) {
+let hash = 0;
+for (let i = 0; i < code.length; i++) {
+hash = code.charCodeAt(i) + ((hash << 5) - hash);
 }
+const palette = isDark ? DARK_TEAM_COLORS : TEAM_COLORS;
+const index = Math.abs(hash) % palette.length;
+return palette[index];
+}
+
+const lightUi = {
+  spinner: "#1c1917",
+  placeholder: "#a8a29e",
+  mutedIcon: "#a8a29e",
+  inviteIcon: "#57534e",
+  activeTabIcon: "#fafaf9",
+  inactiveTabIcon: "#78716c",
+};
+
+const darkUi = {
+  spinner: "#fafaf9",
+  placeholder: "#78716c",
+  mutedIcon: "#78716c",
+  inviteIcon: "#d6d3ca",
+  activeTabIcon: "#1c1917",
+  inactiveTabIcon: "#a8a29e",
+};
 
 function generateDeviceId() {
   return `device_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function makeTeamCode() {
-  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 6 }, () =>
-    letters[Math.floor(Math.random() * letters.length)]
-  ).join("");
+const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+return Array.from({ length: 6 }, () =>
+letters[Math.floor(Math.random() * letters.length)]
+).join("");
+}
+
+function uniqueById<T extends { id: string }>(items: T[]) {
+const seen = new Set<string>();
+return items.filter((item) => {
+if (seen.has(item.id)) return false;
+seen.add(item.id);
+return true;
+});
+}
+
+function encodeAlertTarget(targets: string[]) {
+if (targets.length === 1) return targets[0];
+return `multi:${JSON.stringify(targets)}`;
+}
+
+function parseAlertTargets(toTarget: string) {
+if (toTarget === "all") return { all: true, names: [] };
+if (!toTarget.startsWith("multi:")) return { all: false, names: [toTarget] };
+try {
+const names = JSON.parse(toTarget.slice(6));
+return Array.isArray(names)
+? { all: false, names: names.filter((name): name is string => typeof name === "string") }
+: { all: false, names: [toTarget] };
+} catch {
+return { all: false, names: [toTarget] };
+}
+}
+
+function isAlertForNickname(toTarget: string, nickname: string) {
+const parsed = parseAlertTargets(toTarget);
+return parsed.all || parsed.names.includes(nickname);
+}
+
+function formatAlertTarget(toTarget: string, everyoneLabel: string) {
+const parsed = parseAlertTargets(toTarget);
+if (parsed.all) return everyoneLabel;
+return parsed.names.join(", ");
+}
+
+function formatAlertTime(createdAt: string) {
+const date = new Date(createdAt);
+if (Number.isNaN(date.getTime())) return "";
+const uses24hourClock = Localization.getCalendars()[0]?.uses24hourClock;
+return new Intl.DateTimeFormat(undefined, {
+hour: "numeric",
+minute: "2-digit",
+hour12: uses24hourClock === null ? undefined : !uses24hourClock
+}).format(date);
 }
 
 // ─── Swipeable Team Row ──────────────────────────────────────────────────────
 
 function SwipeableTeamRow({
   team,
-  onPress,
-  onLeave,
-  colors
+onPress,
+onLeave,
+colors,
+styles,
+isDark
 }: {
-  team: LocalTeam;
-  onPress: () => void;
-  onLeave: (team: LocalTeam, onCancel: () => void) => void;
-  colors: { bg: string; icon: string };
+team: LocalTeam;
+onPress: () => void;
+onLeave: (team: LocalTeam, onCancel: () => void) => void;
+colors: { bg: string; icon: string };
+styles: typeof lightStyles;
+isDark: boolean;
 }) {
   const pan = useRef(new Animated.ValueXY()).current;
   const screenWidth = Dimensions.get("window").width;
@@ -163,7 +255,7 @@ function SwipeableTeamRow({
 
   const bgColor = pan.x.interpolate({
     inputRange: [-80, -60, 0],
-    outputRange: ["#ef4444", "#991b1b", "#1e293b"], // Vibrant red when fully triggered
+outputRange: ["#b42318", "#7f1d1d", isDark ? "#3f3a34" : "#ddd6c8"],
     extrapolate: "clamp"
   });
 
@@ -180,7 +272,7 @@ function SwipeableTeamRow({
   });
 
   return (
-    <View style={{ position: "relative", marginBottom: 8, borderRadius: 12, overflow: "hidden", backgroundColor: "#0f172a" }}>
+  <View style={{ position: "relative", marginBottom: 8, borderRadius: 4, overflow: "hidden", backgroundColor: isDark ? "#27231f" : "#f1eee7" }}>
       <Animated.View
         style={{
           position: "absolute",
@@ -217,7 +309,7 @@ function SwipeableTeamRow({
               {team.myNickname} · {i18n.t("teamCode", { code: team.code })}
             </Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color="#334155" />
+        <Ionicons name="chevron-forward" size={18} color={isDark ? "#78716c" : "#a8a29e"} />
         </Pressable>
       </Animated.View>
     </View>
@@ -238,32 +330,54 @@ export default function App() {
 
 function MainApp() {
   const insets = useSafeAreaInsets();
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === "dark";
+  const styles = isDark ? darkStyles : lightStyles;
+  const ui = isDark ? darkUi : lightUi;
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [savedTeams, setSavedTeams] = useState<LocalTeam[]>([]);
   const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [members, setMembers] = useState<DbMember[]>([]);
   const [alertQueue, setAlertQueue] = useState<DbAlert[]>([]);
   const [alerts, setAlerts] = useState<DbAlert[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [statusToggleLocked, setStatusToggleLocked] = useState(false);
+const [loading, setLoading] = useState(false);
+const [debugOpen, setDebugOpen] = useState(false);
+const [debugBusy, setDebugBusy] = useState(false);
+const [statusToggleLocked, setStatusToggleLocked] = useState(false);
   const [message, setMessage] = useState("");
-  const [selectedRecipientId, setSelectedRecipientId] = useState<string>("all");
-  const [codeCopied, setCodeCopied] = useState(false);
-  const copyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pulse = useRef(new Animated.Value(0)).current;
+const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>(["all"]);
+const [selectedAlertDetail, setSelectedAlertDetail] = useState<DbAlert | null>(null);
+const [codeCopied, setCodeCopied] = useState(false);
+const copyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+const pulse = useRef(new Animated.Value(0)).current;
+const alarmSoundRef = useRef<Audio.Sound | null>(null);
+const previousBrightnessRef = useRef<number | null>(null);
 
-  const realtimeCleanupRef = useRef<(() => void) | null>(null);
-  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+const realtimeCleanupRef = useRef<(() => void) | null>(null);
+const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+const myStatusRef = useRef<DbMember["status"]>("available");
 
-  const activeLocalTeam = savedTeams.find((t) => t.id === activeTeamId) ?? null;
-  const myMember = members.find((m) => m.id === activeLocalTeam?.myMemberId) ?? null;
-  const recipients = members.filter((m) => m.status === "available");
+const activeLocalTeam = savedTeams.find((t) => t.id === activeTeamId) ?? null;
+const visibleMembers = uniqueById(members);
+const visibleAlerts = uniqueById(alerts);
+const myMember = visibleMembers.find((m) => m.id === activeLocalTeam?.myMemberId) ?? null;
+const teamMates = visibleMembers.filter((m) => m.id !== activeLocalTeam?.myMemberId);
+const recipients = teamMates.filter((m) => m.status === "available");
   const incomingAlert = alertQueue[0] ?? null;
 
-  const selectedTarget =
-    selectedRecipientId === "all"
-      ? "Tüm ekip"
-      : members.find((m) => m.id === selectedRecipientId)?.nickname ?? "Tüm ekip";
+const selectedAll = selectedRecipientIds.includes("all");
+const selectedRecipients = selectedAll
+? recipients
+: recipients.filter((m) => selectedRecipientIds.includes(m.id));
+const selectedTargetLabel = selectedAll
+? i18n.t("everyone")
+: selectedRecipients.length === 1
+? selectedRecipients[0].nickname
+: `${selectedRecipients.length} kişi`;
+
+useEffect(() => {
+if (myMember) myStatusRef.current = myMember.status;
+}, [myMember?.status]);
 
   useEffect(() => {
     getDeviceId().then((id) => {
@@ -293,38 +407,83 @@ function MainApp() {
     bootstrap();
   }, []);
 
-  useEffect(() => {
-    if (savedTeams.length === 0) return;
-    AsyncStorage.setItem(SAVED_TEAMS_KEY, JSON.stringify(savedTeams)).catch(() => {});
-  }, [savedTeams]);
+useEffect(() => {
+if (savedTeams.length === 0) return;
+AsyncStorage.setItem(SAVED_TEAMS_KEY, JSON.stringify(savedTeams)).catch(() => {});
+}, [savedTeams]);
 
-  useEffect(() => {
-    if (!incomingAlert) {
-      pulse.stopAnimation();
-      pulse.setValue(0);
-      return;
-    }
-    Vibration.vibrate([0, 700, 300, 700], true);
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 700, useNativeDriver: true })
-      ])
-    ).start();
-    return () => {
-      Vibration.cancel();
-      pulse.stopAnimation();
-    };
-  }, [incomingAlert?.id, pulse]);
+const stopAlarmEffects = useCallback(async () => {
+Vibration.cancel();
+pulse.stopAnimation();
+pulse.setValue(0);
+try {
+await alarmSoundRef.current?.stopAsync();
+await alarmSoundRef.current?.unloadAsync();
+} catch {}
+alarmSoundRef.current = null;
+try {
+if (previousBrightnessRef.current !== null) {
+await Brightness.setBrightnessAsync(previousBrightnessRef.current);
+}
+} catch {}
+previousBrightnessRef.current = null;
+deactivateKeepAwake(ALARM_KEEP_AWAKE_TAG).catch(() => {});
+}, [pulse]);
 
-  useEffect(() => {
-    return () => {
-      if (copyTimeout.current) clearTimeout(copyTimeout.current);
-    };
-  }, []);
+const startAlarmEffects = useCallback(async () => {
+await stopAlarmEffects();
+try {
+previousBrightnessRef.current = await Brightness.getBrightnessAsync();
+await Brightness.setBrightnessAsync(1);
+} catch {}
+activateKeepAwakeAsync(ALARM_KEEP_AWAKE_TAG).catch(() => {});
+Vibration.vibrate([0, 1000, 220, 1000, 220, 1500], true);
+try {
+await Audio.setAudioModeAsync({
+allowsRecordingIOS: false,
+interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+playsInSilentModeIOS: true,
+staysActiveInBackground: false,
+interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+shouldDuckAndroid: false,
+playThroughEarpieceAndroid: false
+});
+const { sound } = await Audio.Sound.createAsync(
+require("./assets/alarm.wav"),
+{ isLooping: true, shouldPlay: true, volume: 1 }
+);
+alarmSoundRef.current = sound;
+} catch (e) {
+console.warn("Alarm sound failed", e);
+}
+Animated.loop(
+Animated.sequence([
+Animated.timing(pulse, { toValue: 1, duration: 520, useNativeDriver: true }),
+Animated.timing(pulse, { toValue: 0, duration: 520, useNativeDriver: true })
+])
+).start();
+}, [pulse, stopAlarmEffects]);
 
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+useEffect(() => {
+if (!incomingAlert) {
+void stopAlarmEffects();
+return;
+}
+void startAlarmEffects();
+return () => {
+void stopAlarmEffects();
+};
+}, [incomingAlert?.id, startAlarmEffects, stopAlarmEffects]);
+
+useEffect(() => {
+return () => {
+if (copyTimeout.current) clearTimeout(copyTimeout.current);
+void stopAlarmEffects();
+};
+}, [stopAlarmEffects]);
+
+useEffect(() => {
+const sub = AppState.addEventListener("change", (nextState: AppStateStatus) => {
       const wasBackground =
         appStateRef.current === "background" || appStateRef.current === "inactive";
       const isNowActive = nextState === "active";
@@ -339,10 +498,26 @@ function MainApp() {
       }
       appStateRef.current = nextState;
     });
-    return () => sub.remove();
-  }, [activeTeamId, activeLocalTeam]);
+return () => sub.remove();
+}, [activeTeamId, activeLocalTeam]);
 
-  const startRealtime = useCallback(
+useEffect(() => {
+const sub = Notifications.addNotificationResponseReceivedListener(async (response) => {
+if (myStatusRef.current === "busy") return;
+const alertId = response.notification.request.content.data?.alertId;
+if (typeof alertId !== "string") return;
+const localAlert = visibleAlerts.find((alert) => alert.id === alertId);
+if (localAlert) {
+setSelectedAlertDetail(localAlert);
+return;
+}
+const { data } = await supabase.from("alerts").select("*").eq("id", alertId).maybeSingle();
+if (data) setSelectedAlertDetail(data as DbAlert);
+});
+return () => sub.remove();
+}, [visibleAlerts]);
+
+const startRealtime = useCallback(
     async (teamId: string, myMemberId: string): Promise<() => void> => {
       const { data: memberSnap } = await supabase
         .from("members")
@@ -359,30 +534,39 @@ function MainApp() {
           { event: "INSERT", schema: "public", table: "alerts", filter: `team_id=eq.${teamId}` },
           (payload) => {
             const newAlert = payload.new as DbAlert;
-            setAlerts((prev) => [newAlert, ...prev]);
+            setAlerts((prev) => uniqueById([newAlert, ...prev]));
 
-            const isForMe =
-              newAlert.to_target === "all" ||
-              newAlert.to_target === myNickname;
+const isForMe = isAlertForNickname(newAlert.to_target, myNickname);
+const canInterruptMe = myStatusRef.current === "available";
             
             // Allow receiving our own alerts so we can test the system
-            if (isForMe) {
-              setAlertQueue((q) => [...q, newAlert]);
-            }
+if (isForMe && canInterruptMe) {
+setAlertQueue((q) => [...q, newAlert]);
+}
           }
         )
         .subscribe();
 
       const memberChannel = supabase
         .channel(`members:${teamId}:${Date.now()}`)
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "members", filter: `team_id=eq.${teamId}` },
-          (payload) => {
-            const updated = payload.new as DbMember;
-            setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-          }
-        )
+.on(
+"postgres_changes",
+{ event: "*", schema: "public", table: "members", filter: `team_id=eq.${teamId}` },
+(payload) => {
+if (payload.eventType === "INSERT") {
+const inserted = payload.new as DbMember;
+setMembers((prev) => uniqueById(prev.some((m) => m.id === inserted.id) ? prev : [...prev, inserted]));
+return;
+}
+if (payload.eventType === "DELETE") {
+const deleted = payload.old as Pick<DbMember, "id">;
+setMembers((prev) => prev.filter((m) => m.id !== deleted.id));
+return;
+}
+const updated = payload.new as DbMember;
+setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+}
+)
         .subscribe();
 
       return () => {
@@ -409,8 +593,8 @@ function MainApp() {
       if (mErr) throw mErr;
       if (aErr) throw aErr;
 
-      if (membersData) setMembers(membersData as DbMember[]);
-      if (alertsData) setAlerts(alertsData as DbAlert[]);
+if (membersData) setMembers(uniqueById(membersData as DbMember[]));
+if (alertsData) setAlerts(uniqueById(alertsData as DbAlert[]));
     } catch {
       Alert.alert(
         "Bağlantı Hatası",
@@ -471,7 +655,7 @@ function MainApp() {
       setActiveTeamId(team.id);
       setTeamNameInput("");
       setNicknameInput("");
-      setSelectedRecipientId("all");
+setSelectedRecipientIds(["all"]);
       setMessage("");
     } catch (e: any) {
       Alert.alert(i18n.t("error"), e?.message ?? i18n.t("alertFailed"));
@@ -555,7 +739,7 @@ function MainApp() {
       setActiveTeamId(team.id);
       setJoinCodeInput("");
       setNicknameInput("");
-      setSelectedRecipientId("all");
+setSelectedRecipientIds(["all"]);
       setMessage("");
     } catch (e: any) {
       Alert.alert(i18n.t("error"), e?.message ?? i18n.t("alertFailed"));
@@ -594,24 +778,75 @@ function MainApp() {
     setAlerts([]);
     setAlertQueue([]);
     setMessage("");
-    setSelectedRecipientId("all");
+setSelectedRecipientIds(["all"]);
   }
 
-  function copyCode() {
-    if (!activeLocalTeam) return;
-    Clipboard.setString(activeLocalTeam.code);
-    setCodeCopied(true);
-    if (copyTimeout.current) clearTimeout(copyTimeout.current);
-    copyTimeout.current = setTimeout(() => setCodeCopied(false), 2000);
-  }
+function copyCode() {
+if (!activeLocalTeam) return;
+Clipboard.setString(activeLocalTeam.code);
+setCodeCopied(true);
+if (copyTimeout.current) clearTimeout(copyTimeout.current);
+copyTimeout.current = setTimeout(() => setCodeCopied(false), 2000);
+}
 
-  async function toggleMyStatus() {
+async function addDebugMember() {
+if (!activeLocalTeam || debugBusy) return;
+setDebugBusy(true);
+try {
+const nickname = `Test ${teamMates.length + 1}`;
+const { data, error } = await supabase
+.from("members")
+.insert({
+team_id: activeLocalTeam.id,
+nickname,
+status: "available",
+device_id: `debug_${Date.now()}`,
+push_token: null
+})
+.select()
+.single();
+if (error || !data) throw error ?? new Error("Test üye eklenemedi");
+const member = data as DbMember;
+setMembers((prev) => uniqueById(prev.some((m) => m.id === member.id) ? prev : [...prev, member]));
+} catch (e: any) {
+Alert.alert(i18n.t("error"), e?.message ?? "Debug işlemi başarısız.");
+} finally {
+setDebugBusy(false);
+}
+}
+
+async function sendDebugAlertToMe() {
+if (!activeLocalTeam || !myMember || debugBusy) return;
+setDebugBusy(true);
+try {
+const text = message.trim() || "Debug test alarmı";
+const { error } = await supabase.from("alerts").insert({
+team_id: activeLocalTeam.id,
+from_nickname: "Debug",
+to_target: myMember.nickname,
+message: text,
+acknowledged: false
+});
+if (error) throw error;
+} catch (e: any) {
+Alert.alert(i18n.t("error"), e?.message ?? "Debug alarmı gönderilemedi.");
+} finally {
+setDebugBusy(false);
+}
+}
+
+async function toggleMyStatus() {
     if (!myMember) return;
     const newStatus = myMember.status === "available" ? "busy" : "available";
     const oldStatus = myMember.status;
     
-    // Optimistic update
-    setMembers((prev) => prev.map((m) => (m.id === myMember.id ? { ...m, status: newStatus } : m)));
+// Optimistic update
+myStatusRef.current = newStatus;
+if (newStatus === "busy") {
+void stopAlarmEffects();
+setAlertQueue([]);
+}
+setMembers((prev) => uniqueById(prev.map((m) => (m.id === myMember.id ? { ...m, status: newStatus } : m))));
     
     try {
       const { error } = await supabase
@@ -621,16 +856,18 @@ function MainApp() {
         
       if (error) {
         console.warn("Status update error:", error);
-        setMembers((prev) =>
-          prev.map((m) => (m.id === myMember.id ? { ...m, status: oldStatus } : m))
-        );
+setMembers((prev) =>
+prev.map((m) => (m.id === myMember.id ? { ...m, status: oldStatus } : m))
+);
+myStatusRef.current = oldStatus;
         Alert.alert(i18n.t("error"), i18n.t("statusFailed"));
       }
     } catch (e) {
       console.warn("Status update exception:", e);
-      setMembers((prev) =>
-        prev.map((m) => (m.id === myMember.id ? { ...m, status: oldStatus } : m))
-      );
+setMembers((prev) =>
+prev.map((m) => (m.id === myMember.id ? { ...m, status: oldStatus } : m))
+);
+myStatusRef.current = oldStatus;
     }
   }
 
@@ -641,8 +878,12 @@ function MainApp() {
       Alert.alert(i18n.t("messageRequiredTitle"), i18n.t("messageRequiredMsg"));
       return;
     }
-    const targetName = selectedTarget === "all" ? "all" : members.find(m => m.id === selectedTarget)?.nickname ?? selectedTarget;
-    const displayTarget = selectedTarget === "all" ? i18n.t("everyone") : targetName;
+const targetNames = selectedAll ? ["all"] : selectedRecipients.map((m) => m.nickname);
+if (targetNames.length === 0) {
+Alert.alert(i18n.t("missingInfo"), "En az bir kişi seç.");
+return;
+}
+const displayTarget = selectedAll ? i18n.t("everyone") : targetNames.join(", ");
     
     Alert.alert(
       i18n.t("confirmAlertTitle"),
@@ -654,27 +895,29 @@ function MainApp() {
           style: "destructive",
           onPress: async () => {
             try {
-              const { error } = await supabase.from("alerts").insert({
-                team_id: activeLocalTeam.id,
-                from_nickname: myMember.nickname,
-                to_target: targetName,
-                message: trimmed,
-                acknowledged: false
-              });
-              if (error) throw error;
-              setMessage("");
+const targetName = encodeAlertTarget(targetNames);
+const { data: insertedAlert, error } = await supabase.from("alerts").insert({
+team_id: activeLocalTeam.id,
+from_nickname: myMember.nickname,
+to_target: targetName,
+message: trimmed,
+acknowledged: false
+}).select().single();
+if (error) throw error;
+setMessage("");
               
               // Send native push notifications
-              const pushMessages = [];
-              for (const m of members) {
-                if (!m.push_token) continue;
-                if (targetName === "all" || m.nickname === targetName) {
+const pushMessages = [];
+for (const m of visibleMembers) {
+if (!m.push_token) continue;
+if (m.status === "busy") continue;
+if (selectedAll || targetNames.includes(m.nickname)) {
                   pushMessages.push({
                     to: m.push_token,
                     sound: 'default',
                     title: `AcilPing — ${myMember.nickname}`,
-                    body: trimmed,
-                    data: { teamId: activeLocalTeam.id },
+body: trimmed,
+data: { teamId: activeLocalTeam.id, alertId: insertedAlert?.id },
                   });
                 }
               }
@@ -701,10 +944,10 @@ function MainApp() {
   }
 
   // Bug #4: Kuyruktaki ilk alarmı kapat, varsa bir sonrakine geç
-  async function acknowledgeAlert() {
-    if (!incomingAlert) return;
-    Vibration.cancel();
-    setAlertQueue((q) => q.slice(1));
+async function acknowledgeAlert() {
+if (!incomingAlert) return;
+void stopAlarmEffects();
+setAlertQueue((q) => q.slice(1));
 
     try {
       await supabase
@@ -744,7 +987,7 @@ function MainApp() {
   if (!deviceId) {
     return (
       <View style={[styles.screen, styles.center]}>
-        <ActivityIndicator size="large" color="#6366f1" />
+        <ActivityIndicator size="large" color={ui.spinner} />
       </View>
     );
   }
@@ -756,7 +999,7 @@ function MainApp() {
   if (!activeTeamId) {
     return (
       <View style={styles.screen}>
-        <StatusBar style="light" />
+        <StatusBar style={isDark ? "light" : "dark"} />
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.authLayout}
@@ -786,7 +1029,7 @@ function MainApp() {
                   <Text style={styles.sectionMeta}>{i18n.t("teamCount", { count: savedTeams.length })}</Text>
                 </View>
                 {savedTeams.map((t) => {
-                  const colors = getTeamColor(t.code);
+                  const colors = getTeamColor(t.code, isDark);
                   return (
                     <SwipeableTeamRow
                       key={t.id}
@@ -794,6 +1037,8 @@ function MainApp() {
                       onPress={() => setActiveTeamId(t.id)}
                       onLeave={leaveTeam}
                       colors={colors}
+                      styles={styles}
+                      isDark={isDark}
                     />
                   );
                 })}
@@ -820,7 +1065,7 @@ function MainApp() {
                   <Ionicons
                     name="add-circle-outline"
                     size={16}
-                    color={homeTab === 0 ? "#f1f5f9" : "#475569"}
+                    color={homeTab === 0 ? ui.activeTabIcon : ui.inactiveTabIcon}
                   />
                   <Text style={[styles.segmentLabel, homeTab === 0 && styles.segmentLabelActive]}>
                     {i18n.t("createTab")}
@@ -830,7 +1075,7 @@ function MainApp() {
                   <Ionicons
                     name="enter-outline"
                     size={16}
-                    color={homeTab === 1 ? "#f1f5f9" : "#475569"}
+                    color={homeTab === 1 ? ui.activeTabIcon : ui.inactiveTabIcon}
                   />
                   <Text style={[styles.segmentLabel, homeTab === 1 && styles.segmentLabelActive]}>
                     {i18n.t("joinTab")}
@@ -845,7 +1090,7 @@ function MainApp() {
                     autoCapitalize="words"
                     onChangeText={setTeamNameInput}
                     placeholder={i18n.t("teamNamePlaceholder")}
-                    placeholderTextColor="#475569"
+                    placeholderTextColor={ui.placeholder}
                     style={styles.input}
                     value={teamNameInput}
                     maxLength={40}
@@ -854,7 +1099,7 @@ function MainApp() {
                     autoCapitalize="words"
                     onChangeText={setNicknameInput}
                     placeholder={i18n.t("yourNickname")}
-                    placeholderTextColor="#475569"
+                    placeholderTextColor={ui.placeholder}
                     style={styles.input}
                     value={nicknameInput}
                     maxLength={24}
@@ -868,7 +1113,7 @@ function MainApp() {
                     ]}
                   >
                     {loading ? (
-                      <ActivityIndicator color="#fff" />
+                      <ActivityIndicator color={isDark ? "#1c1917" : "#fff"} />
                     ) : (
                       <>
                         <Ionicons name="add-circle-outline" size={20} color="#fff" />
@@ -886,7 +1131,7 @@ function MainApp() {
                     autoCapitalize="characters"
                     onChangeText={setJoinCodeInput}
                     placeholder={i18n.t("joinCodePlaceholder")}
-                    placeholderTextColor="#475569"
+                    placeholderTextColor={ui.placeholder}
                     style={styles.input}
                     value={joinCodeInput}
                     maxLength={8}
@@ -895,7 +1140,7 @@ function MainApp() {
                     autoCapitalize="words"
                     onChangeText={setNicknameInput}
                     placeholder={i18n.t("yourNickname")}
-                    placeholderTextColor="#475569"
+                    placeholderTextColor={ui.placeholder}
                     style={styles.input}
                     value={nicknameInput}
                     maxLength={24}
@@ -909,7 +1154,7 @@ function MainApp() {
                     ]}
                   >
                     {loading ? (
-                      <ActivityIndicator color="#92400e" />
+                      <ActivityIndicator color={isDark ? "#fafaf9" : "#1c1917"} />
                     ) : (
                       <>
                         <Ionicons name="enter" size={20} color="#92400e" />
@@ -934,7 +1179,7 @@ function MainApp() {
 
   return (
     <View style={styles.screen}>
-      <StatusBar style="light" />
+        <StatusBar style={isDark ? "light" : "dark"} />
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 14) }]}>
@@ -959,19 +1204,55 @@ function MainApp() {
           { paddingBottom: Math.max(insets.bottom, 40) }
         ]}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Members */}
-        <View style={styles.section}>
+keyboardShouldPersistTaps="handled"
+>
+        <View style={styles.debugPanel}>
+          <Pressable
+            onPress={() => setDebugOpen((open) => !open)}
+            style={({ pressed }) => [styles.debugHeader, pressed && styles.buttonPressed]}
+          >
+            <View style={styles.debugHeaderText}>
+              <Text style={styles.debugTitle}>Debug</Text>
+              <Text style={styles.debugHint} numberOfLines={1}>
+                Test araçları
+              </Text>
+            </View>
+            <Ionicons name={debugOpen ? "chevron-up" : "chevron-down"} size={18} color={ui.mutedIcon} />
+          </Pressable>
+
+          {debugOpen && (
+            <View style={styles.debugBody}>
+              <Pressable
+                disabled={debugBusy}
+                onPress={addDebugMember}
+                style={({ pressed }) => [styles.debugButton, (pressed || debugBusy) && styles.buttonPressed]}
+              >
+                <Ionicons name="person-add-outline" size={17} color={ui.inviteIcon} />
+                <Text style={styles.debugButtonText}>Takıma test adamı ekle</Text>
+              </Pressable>
+              <Pressable
+                disabled={debugBusy}
+                onPress={sendDebugAlertToMe}
+                style={({ pressed }) => [styles.debugButton, (pressed || debugBusy) && styles.buttonPressed]}
+              >
+                <Ionicons name="send-outline" size={17} color={ui.inviteIcon} />
+                <Text style={styles.debugButtonText}>Kendime test alarmı gönder</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+
+{/* Members */}
+<View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>{i18n.t("membersTitle")}</Text>
-            <Text style={styles.sectionMeta}>{i18n.t("membersCount", { count: members.length })}</Text>
+            <Text style={styles.sectionMeta}>{i18n.t("membersCount", { count: visibleMembers.length })}</Text>
           </View>
           
           {loading && members.length === 0 ? (
-            <ActivityIndicator size="small" color="#6366f1" style={{ marginVertical: 20 }} />
+            <ActivityIndicator size="small" color={ui.spinner} style={{ marginVertical: 20 }} />
           ) : (
-            members.map((member) => {
+            visibleMembers.map((member) => {
               const isMe = member.id === activeLocalTeam?.myMemberId;
               return (
                 <View key={member.id} style={styles.memberRow}>
@@ -1009,26 +1290,54 @@ function MainApp() {
         </View>
 
         {/* Composer */}
-        <View style={styles.composerCard}>
-          <Text style={styles.sectionTitle}>{i18n.t("sendAlertTitle")}</Text>
-          
-          {loading && members.length === 0 ? (
-            <ActivityIndicator size="small" color="#6366f1" style={{ marginVertical: 10 }} />
-          ) : recipients.length === 0 ? (
-            <Text style={styles.emptyText}>{i18n.t("inviteOthers")}</Text>
-          ) : (
-            <FlatList
+        {loading && members.length === 0 ? (
+          <View style={styles.composerCard}>
+            <ActivityIndicator size="small" color={ui.spinner} style={{ marginVertical: 10 }} />
+          </View>
+        ) : teamMates.length === 0 ? (
+          <View style={styles.inviteEmptyCard}>
+            <Ionicons name="people-outline" size={30} color={ui.inviteIcon} />
+            <Text style={styles.inviteEmptyTitle}>{i18n.t("inviteEmptyTitle")}</Text>
+            <Text style={styles.inviteEmptyText}>
+              {i18n.t("inviteEmptyMessage", { code: activeLocalTeam?.code ?? "" })}
+            </Text>
+            <Pressable onPress={copyCode} style={({ pressed }) => [styles.inviteCodeButton, pressed && styles.buttonPressed]}>
+              <Text style={styles.inviteCodeLabel}>
+                {codeCopied ? i18n.t("copied") : i18n.t("teamCode", { code: activeLocalTeam?.code ?? "" })}
+              </Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.composerCard}>
+            <Text style={styles.sectionTitle}>{i18n.t("sendAlertTitle")}</Text>
+
+            {recipients.length === 0 ? (
+              <Text style={styles.emptyText}>{i18n.t("inviteOthers")}</Text>
+            ) : (
+              <FlatList
               data={[
                 { id: "all", nickname: i18n.t("everyone"), status: "available" as const, team_id: "", device_id: null, push_token: null, created_at: "" },
                 ...recipients
               ]}
               horizontal
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => {
-                const selected = selectedRecipientId === item.id;
-                return (
-                  <Pressable
-                    onPress={() => setSelectedRecipientId(item.id)}
+keyExtractor={(item) => (item.id === "all" ? "recipient-all" : `recipient-${item.id}`)}
+renderItem={({ item }) => {
+const selected = selectedRecipientIds.includes(item.id);
+return (
+<Pressable
+                    onPress={() => {
+                      if (item.id === "all") {
+                        setSelectedRecipientIds(["all"]);
+                        return;
+                      }
+                      setSelectedRecipientIds((prev) => {
+                        const withoutAll = prev.filter((id) => id !== "all");
+                        const next = withoutAll.includes(item.id)
+                          ? withoutAll.filter((id) => id !== item.id)
+                          : [...withoutAll, item.id];
+                        return next.length === 0 ? ["all"] : next;
+                      });
+                    }}
                     style={[styles.chip, selected && styles.chipSelected]}
                   >
                     <Text style={[styles.chipText, selected && styles.chipTextSelected]} numberOfLines={1}>
@@ -1040,12 +1349,12 @@ function MainApp() {
               showsHorizontalScrollIndicator={false}
               style={styles.chipList}
             />
-          )}
-          <TextInput
+            )}
+            <TextInput
             multiline
             onChangeText={setMessage}
             placeholder={i18n.t("alertMessagePlaceholder")}
-            placeholderTextColor="#475569"
+            placeholderTextColor={ui.placeholder}
             style={styles.messageInput}
             value={message}
             maxLength={300}
@@ -1056,36 +1365,48 @@ function MainApp() {
           >
             <Ionicons name="notifications" size={20} color="#fff" />
             <Text style={styles.dangerButtonText} numberOfLines={1}>
-              {i18n.t("sendBtn")} → {selectedTarget === "all" ? i18n.t("everyone") : selectedTarget}
+              {i18n.t("sendBtn")} → {selectedTargetLabel}
             </Text>
-          </Pressable>
-        </View>
+</Pressable>
+          </View>
+        )}
 
         {/* History */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>{i18n.t("historyTitle")}</Text>
-            <Text style={styles.sectionMeta}>{i18n.t("historyCount", { count: alerts.length })}</Text>
+            <Text style={styles.sectionMeta}>{i18n.t("historyCount", { count: visibleAlerts.length })}</Text>
           </View>
           
           {loading && alerts.length === 0 ? (
-            <ActivityIndicator size="small" color="#6366f1" style={{ marginVertical: 20 }} />
-          ) : alerts.length === 0 ? (
+            <ActivityIndicator size="small" color={ui.spinner} style={{ marginVertical: 20 }} />
+          ) : visibleAlerts.length === 0 ? (
             <View style={styles.emptyState}>
-              <Ionicons name="notifications-off-outline" size={32} color="#334155" />
+              <Ionicons name="notifications-off-outline" size={32} color={ui.mutedIcon} />
               <Text style={styles.emptyText}>{i18n.t("noAlerts")}</Text>
             </View>
           ) : (
-            alerts.slice(0, 10).map((item) => (
-              <View key={item.id} style={styles.historyRow}>
-                <View style={[styles.historyDot, item.acknowledged ? styles.historyDotAck : styles.historyDotPending]} />
+visibleAlerts.slice(0, 10).map((item, index, visibleItems) => (
+<Pressable
+key={item.id}
+onPress={() => setSelectedAlertDetail(item)}
+onLongPress={() => setSelectedAlertDetail(item)}
+style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
+>
+                <View style={styles.historyTimeline}>
+                  <View style={[styles.historyDot, item.acknowledged ? styles.historyDotAck : styles.historyDotPending]} />
+                  {index < visibleItems.length - 1 && <View style={styles.historyLine} />}
+                </View>
                 <View style={styles.historyInfo}>
-                  <Text style={styles.historyMessage} numberOfLines={2}>{item.message}</Text>
+                  <View style={styles.historyTopLine}>
+                    <Text style={styles.historyMessage} numberOfLines={2}>{item.message}</Text>
+                    <Text style={styles.historyTime}>{formatAlertTime(item.created_at)}</Text>
+                  </View>
                   <Text style={styles.historyMeta} numberOfLines={1}>
-                    {item.from_nickname} → {item.to_target === "all" ? i18n.t("everyone") : item.to_target} · {item.acknowledged ? i18n.t("received") : i18n.t("sent")}
+                    {item.from_nickname} → {formatAlertTarget(item.to_target, i18n.t("everyone"))}
                   </Text>
                 </View>
-              </View>
+              </Pressable>
             ))
           )}
         </View>
@@ -1131,70 +1452,108 @@ function MainApp() {
               </Text>
             </Pressable>
           </Animated.View>
-        </View>
-      </Modal>
+</View>
+</Modal>
+
+<Modal animationType="fade" transparent visible={Boolean(selectedAlertDetail)}>
+  <View style={styles.modalBackdrop}>
+    <View style={styles.detailCard}>
+      <View style={styles.detailHeader}>
+        <Text style={styles.detailTitle}>Alarm detayı</Text>
+        <Pressable onPress={() => setSelectedAlertDetail(null)} style={({ pressed }) => [styles.detailClose, pressed && styles.buttonPressed]}>
+          <Ionicons name="close" size={20} color={ui.inviteIcon} />
+        </Pressable>
+      </View>
+      {selectedAlertDetail && (
+        <>
+          <Text style={styles.detailMessage}>{selectedAlertDetail.message}</Text>
+          <View style={styles.detailBlock}>
+            <Text style={styles.detailLabel}>Gönderen</Text>
+            <Text style={styles.detailValue}>{selectedAlertDetail.from_nickname}</Text>
+          </View>
+          <View style={styles.detailBlock}>
+            <Text style={styles.detailLabel}>Alıcılar</Text>
+            <ScrollView style={styles.detailTargets} nestedScrollEnabled>
+              {parseAlertTargets(selectedAlertDetail.to_target).all ? (
+                <Text style={styles.detailValue}>{i18n.t("everyone")}</Text>
+              ) : (
+                parseAlertTargets(selectedAlertDetail.to_target).names.map((name, index) => (
+                  <Text key={`${name}-${index}`} style={styles.detailTargetItem}>{name}</Text>
+                ))
+              )}
+            </ScrollView>
+          </View>
+          <View style={styles.detailBlock}>
+            <Text style={styles.detailLabel}>Durum</Text>
+            <Text style={styles.detailValue}>{selectedAlertDetail.acknowledged ? "Kapatıldı" : "Aktif"}</Text>
+          </View>
+        </>
+      )}
     </View>
-  );
+  </View>
+</Modal>
+</View>
+);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLES
 // ─────────────────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#0a0f1e" },
+const lightStyles = StyleSheet.create({
+screen: { flex: 1, backgroundColor: "#f7f5ef" },
   center: { alignItems: "center", justifyContent: "center", gap: 12 },
-  loadingText: { color: "#64748b", fontSize: 16 },
+loadingText: { color: "#78716c", fontSize: 15 },
 
   authLayout: { flex: 1 },
-  authScroll: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 40, gap: 16 },
-  hero: { alignItems: "center", paddingTop: 10, paddingBottom: 20, gap: 10 },
+authScroll: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 40, gap: 14 },
+hero: { alignItems: "flex-start", paddingTop: 8, paddingBottom: 10, gap: 6 },
   heroIconWrap: {
-    width: 72, height: 72, borderRadius: 20, backgroundColor: "#6366f1",
+width: 42, height: 42, borderRadius: 6, backgroundColor: "#1c1917",
     alignItems: "center", justifyContent: "center", marginBottom: 4,
-    shadowColor: "#6366f1", shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5, shadowRadius: 16
+shadowColor: "transparent", shadowOffset: { width: 0, height: 0 },
+shadowOpacity: 0, shadowRadius: 0
   },
-  heroTitle: { fontSize: 40, fontWeight: "900", color: "#f8fafc", letterSpacing: -1 },
-  heroSub: { fontSize: 16, color: "#64748b", textAlign: "center", lineHeight: 24, maxWidth: 300 },
+heroTitle: { fontSize: 30, fontWeight: "800", color: "#1c1917" },
+heroSub: { fontSize: 14, color: "#78716c", lineHeight: 20, maxWidth: 340 },
 
-  card: { backgroundColor: "#111827", borderRadius: 16, padding: 20, gap: 12, borderWidth: 1, borderColor: "#1e293b" },
+card: { backgroundColor: "#fffdf8", borderRadius: 6, padding: 14, gap: 10, borderWidth: 1, borderColor: "#ddd6c8" },
   cardHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 4 },
-  cardIconWrap: { width: 36, height: 36, borderRadius: 10, backgroundColor: "#ede9fe", alignItems: "center", justifyContent: "center" },
-  cardTitle: { fontSize: 18, fontWeight: "800", color: "#f1f5f9" },
-  input: { backgroundColor: "#0f172a", borderColor: "#1e293b", borderRadius: 10, borderWidth: 1, color: "#f8fafc", fontSize: 16, height: 50, paddingHorizontal: 16 },
-  primaryButton: { alignItems: "center", backgroundColor: "#6366f1", borderRadius: 12, flexDirection: "row", gap: 8, height: 52, justifyContent: "center", shadowColor: "#6366f1", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 12 },
-  primaryButtonText: { color: "#fff", fontSize: 16, fontWeight: "800" },
-  secondaryButton: { alignItems: "center", backgroundColor: "#fbbf24", borderRadius: 12, flexDirection: "row", gap: 8, height: 52, justifyContent: "center" },
-  secondaryButtonText: { color: "#92400e", fontSize: 16, fontWeight: "800" },
-  buttonPressed: { opacity: 0.6 },
+cardIconWrap: { width: 32, height: 32, borderRadius: 4, backgroundColor: "#f1eee7", alignItems: "center", justifyContent: "center" },
+cardTitle: { fontSize: 17, fontWeight: "700", color: "#1c1917" },
+input: { backgroundColor: "#fffefb", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, color: "#1c1917", fontSize: 15, height: 46, paddingHorizontal: 12 },
+primaryButton: { alignItems: "center", backgroundColor: "#1c1917", borderRadius: 4, flexDirection: "row", gap: 8, height: 46, justifyContent: "center", shadowColor: "transparent", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0 },
+primaryButtonText: { color: "#fafaf9", fontSize: 15, fontWeight: "700" },
+secondaryButton: { alignItems: "center", backgroundColor: "#e7e0d3", borderRadius: 4, borderWidth: 1, borderColor: "#d6d3ca", flexDirection: "row", gap: 8, height: 46, justifyContent: "center" },
+secondaryButtonText: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
+buttonPressed: { opacity: 0.7 },
   divider: { flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 4 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: "#1e293b" },
-  dividerText: { color: "#475569", fontSize: 14, fontWeight: "600" },
+dividerLine: { flex: 1, height: 1, backgroundColor: "#ddd6c8" },
+dividerText: { color: "#78716c", fontSize: 13, fontWeight: "600" },
 
   // ── Segment tab ──
   segmentTrack: {
     flexDirection: "row",
-    backgroundColor: "#0a0f1e",
-    borderRadius: 14,
+backgroundColor: "#f1eee7",
+borderRadius: 6,
     padding: 4,
     position: "relative",
     height: 52,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: "#1e293b"
+borderColor: "#ddd6c8"
   },
   segmentIndicator: {
     position: "absolute",
     top: 4,
     bottom: 4,
     width: "47%",
-    backgroundColor: "#6366f1",
-    borderRadius: 10,
-    shadowColor: "#6366f1",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.55,
-    shadowRadius: 10
+backgroundColor: "#1c1917",
+borderRadius: 4,
+shadowColor: "transparent",
+shadowOffset: { width: 0, height: 0 },
+shadowOpacity: 0,
+shadowRadius: 0
   },
   segmentBtn: {
     flex: 1,
@@ -1203,82 +1562,188 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 7,
     zIndex: 1,
-    borderRadius: 10
+borderRadius: 4
   },
   segmentLabel: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#475569",
-    letterSpacing: 0.1
+color: "#78716c"
   },
   segmentLabelActive: {
-    color: "#ffffff"
+color: "#fafaf9"
   },
 
-  teamRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#111827", borderRadius: 12, borderWidth: 1, borderColor: "#1e293b", padding: 14, gap: 12 },
-  teamRowIcon: { width: 38, height: 38, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+teamRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 4, borderWidth: 1, borderColor: "#ddd6c8", padding: 12, gap: 10 },
+teamRowIcon: { width: 34, height: 34, borderRadius: 4, alignItems: "center", justifyContent: "center" },
   teamRowInfo: { flex: 1, overflow: "hidden" },
-  teamRowName: { color: "#f1f5f9", fontSize: 15, fontWeight: "700" },
-  teamRowMeta: { color: "#475569", fontSize: 13, marginTop: 2 },
+teamRowName: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
+teamRowMeta: { color: "#78716c", fontSize: 13, marginTop: 2 },
 
-  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "#1e293b", gap: 12 },
-  backButton: { width: 40, height: 40, borderRadius: 10, backgroundColor: "#111827", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#1e293b" },
+header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#ddd6c8", gap: 10, backgroundColor: "#fffdf8" },
+backButton: { width: 38, height: 38, borderRadius: 4, backgroundColor: "#f7f5ef", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#ddd6c8" },
   headerCenter: { flex: 1, overflow: "hidden" },
-  headerKicker: { color: "#475569", fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1 },
-  headerTitle: { color: "#f8fafc", fontSize: 20, fontWeight: "800" },
-  codeBadge: { backgroundColor: "#111827", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, alignItems: "center", borderWidth: 1, borderColor: "#1e293b", minWidth: 90 },
-  codeLabel: { color: "#6366f1", fontSize: 10, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
-  codeText: { color: "#f8fafc", fontSize: 16, fontWeight: "900", letterSpacing: 2 },
+headerKicker: { color: "#78716c", fontSize: 11, fontWeight: "700", textTransform: "uppercase" },
+headerTitle: { color: "#1c1917", fontSize: 19, fontWeight: "800" },
+codeBadge: { backgroundColor: "#fffdf8", borderRadius: 4, paddingHorizontal: 10, paddingVertical: 7, alignItems: "center", borderWidth: 1, borderColor: "#d6d3ca", minWidth: 86 },
+codeLabel: { color: "#78716c", fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
+codeText: { color: "#1c1917", fontSize: 15, fontWeight: "800", letterSpacing: 1 },
 
   scrollView: { flex: 1 },
-  content: { gap: 20, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
-  section: { gap: 10 },
-  sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 2 },
-  sectionTitle: { color: "#f1f5f9", fontSize: 17, fontWeight: "800" },
-  sectionMeta: { color: "#475569", fontSize: 14, fontWeight: "600" },
+content: { gap: 16, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
+section: { gap: 10 },
+sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 2 },
+sectionTitle: { color: "#1c1917", fontSize: 16, fontWeight: "800" },
+sectionMeta: { color: "#78716c", fontSize: 13, fontWeight: "600" },
 
-  memberRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#111827", borderRadius: 12, borderWidth: 1, borderColor: "#1e293b", padding: 14, gap: 12 },
-  avatar: { width: 42, height: 42, borderRadius: 12, backgroundColor: "#1e3a5f", alignItems: "center", justifyContent: "center" },
-  avatarBusy: { backgroundColor: "#450a0a" },
-  avatarText: { color: "#60a5fa", fontSize: 18, fontWeight: "900" },
-  avatarTextBusy: { color: "#ef4444" },
+debugPanel: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", overflow: "hidden" },
+debugHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 10 },
+debugHeaderText: { flex: 1, gap: 2 },
+debugTitle: { color: "#1c1917", fontSize: 15, fontWeight: "800" },
+debugHint: { color: "#78716c", fontSize: 12, fontWeight: "600" },
+debugBody: { borderTopWidth: 1, borderTopColor: "#ddd6c8", gap: 8, padding: 10 },
+debugButton: { alignItems: "center", backgroundColor: "#f7f5ef", borderRadius: 4, borderWidth: 1, borderColor: "#d6d3ca", flexDirection: "row", gap: 8, minHeight: 40, paddingHorizontal: 10 },
+debugButtonText: { color: "#1c1917", flex: 1, fontSize: 14, fontWeight: "700" },
+
+memberRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 4, borderWidth: 1, borderColor: "#ddd6c8", padding: 12, gap: 10 },
+avatar: { width: 36, height: 36, borderRadius: 4, backgroundColor: "#f1eee7", alignItems: "center", justifyContent: "center" },
+avatarBusy: { backgroundColor: "#f3e6e3" },
+avatarText: { color: "#44403c", fontSize: 16, fontWeight: "800" },
+avatarTextBusy: { color: "#b42318" },
   memberInfo: { flex: 1, overflow: "hidden" },
-  memberName: { color: "#f1f5f9", fontSize: 15, fontWeight: "700" },
-  memberStatus: { color: "#22c55e", fontSize: 13, marginTop: 2, fontWeight: "600" },
-  memberStatusBusy: { color: "#ef4444" },
-  statusToggle: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
-  statusToggleAvailable: { backgroundColor: "#450a0a", borderColor: "#ef4444" },
-  statusToggleBusy: { backgroundColor: "#052e16", borderColor: "#22c55e" },
-  statusToggleText: { color: "#f1f5f9", fontSize: 12, fontWeight: "700" },
+memberName: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
+memberStatus: { color: "#4d7c0f", fontSize: 13, marginTop: 2, fontWeight: "600" },
+memberStatusBusy: { color: "#b42318" },
+statusToggle: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4, borderWidth: 1 },
+statusToggleAvailable: { backgroundColor: "#fffdf8", borderColor: "#b42318" },
+statusToggleBusy: { backgroundColor: "#fffdf8", borderColor: "#4d7c0f" },
+statusToggleText: { color: "#1c1917", fontSize: 12, fontWeight: "700" },
 
-  composerCard: { backgroundColor: "#111827", borderRadius: 16, borderWidth: 1, borderColor: "#3f1515", padding: 18, gap: 14 },
+composerCard: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", padding: 14, gap: 12 },
+inviteEmptyCard: { alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", gap: 8, padding: 18 },
+inviteEmptyTitle: { color: "#1c1917", fontSize: 16, fontWeight: "800", textAlign: "center" },
+inviteEmptyText: { color: "#78716c", fontSize: 14, fontWeight: "600", lineHeight: 20, textAlign: "center" },
+inviteCodeButton: { backgroundColor: "#f7f5ef", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, marginTop: 4, paddingHorizontal: 12, paddingVertical: 9 },
+inviteCodeLabel: { color: "#1c1917", fontSize: 14, fontWeight: "800" },
   chipList: { marginHorizontal: -4 },
-  chip: { backgroundColor: "#0f172a", borderColor: "#1e293b", borderRadius: 8, borderWidth: 1, marginHorizontal: 4, paddingHorizontal: 14, paddingVertical: 8, maxWidth: 140 },
-  chipSelected: { backgroundColor: "#6366f1", borderColor: "#6366f1" },
-  chipText: { color: "#94a3b8", fontSize: 14, fontWeight: "700" },
-  chipTextSelected: { color: "#fff" },
-  messageInput: { backgroundColor: "#0f172a", borderColor: "#1e293b", borderRadius: 10, borderWidth: 1, color: "#f8fafc", fontSize: 16, minHeight: 90, padding: 14, textAlignVertical: "top" },
-  dangerButton: { alignItems: "center", backgroundColor: "#dc2626", borderRadius: 12, flexDirection: "row", gap: 8, height: 54, justifyContent: "center", shadowColor: "#dc2626", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 12 },
-  dangerButtonText: { color: "#fff", fontSize: 16, fontWeight: "800", flexShrink: 1 },
+chip: { backgroundColor: "#fffefb", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, marginHorizontal: 4, paddingHorizontal: 12, paddingVertical: 7, maxWidth: 140 },
+chipSelected: { backgroundColor: "#1c1917", borderColor: "#1c1917" },
+chipText: { color: "#57534e", fontSize: 14, fontWeight: "700" },
+chipTextSelected: { color: "#fafaf9" },
+messageInput: { backgroundColor: "#fffefb", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, color: "#1c1917", fontSize: 15, minHeight: 86, padding: 12, textAlignVertical: "top" },
+dangerButton: { alignItems: "center", backgroundColor: "#b42318", borderRadius: 4, flexDirection: "row", gap: 8, height: 48, justifyContent: "center", shadowColor: "transparent", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0 },
+dangerButtonText: { color: "#fffdf8", fontSize: 15, fontWeight: "800", flexShrink: 1 },
 
   emptyState: { alignItems: "center", gap: 8, padding: 24 },
-  emptyText: { color: "#334155", fontSize: 15, fontWeight: "600" },
-  historyRow: { flexDirection: "row", alignItems: "flex-start", backgroundColor: "#111827", borderRadius: 12, borderWidth: 1, borderColor: "#1e293b", padding: 14, gap: 12 },
+emptyText: { color: "#78716c", fontSize: 14, fontWeight: "600" },
+  historyRow: { flexDirection: "row", alignItems: "stretch", gap: 12, minHeight: 54 },
+  historyTimeline: { alignItems: "center", width: 14 },
   historyDot: { width: 10, height: 10, borderRadius: 5, marginTop: 5 },
-  historyDotPending: { backgroundColor: "#f59e0b" },
-  historyDotAck: { backgroundColor: "#22c55e" },
-  historyInfo: { flex: 1, gap: 4 },
-  historyMessage: { color: "#f1f5f9", fontSize: 15, fontWeight: "700" },
-  historyMeta: { color: "#475569", fontSize: 13 },
+historyLine: { flex: 1, width: 1, backgroundColor: "#ddd6c8", marginTop: 7 },
+historyDotPending: { backgroundColor: "#b42318" },
+historyDotAck: { backgroundColor: "#4d7c0f" },
+historyInfo: { flex: 1, gap: 4, paddingBottom: 16 },
+historyTopLine: { alignItems: "flex-start", flexDirection: "row", gap: 10, justifyContent: "space-between" },
+historyMessage: { color: "#1c1917", flex: 1, fontSize: 15, fontWeight: "700" },
+historyTime: { color: "#78716c", fontSize: 12, fontWeight: "700", marginTop: 2 },
+historyMeta: { color: "#78716c", fontSize: 13 },
 
-  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.88)", alignItems: "center", justifyContent: "center", padding: 24 },
-  alarmCard: { alignItems: "center", backgroundColor: "#111827", borderRadius: 24, borderWidth: 1, borderColor: "#3f1515", padding: 32, width: "100%", gap: 8 },
-  queueBadge: { backgroundColor: "#dc2626", borderRadius: 20, paddingHorizontal: 14, paddingVertical: 4, marginBottom: 8 },
+modalBackdrop: { flex: 1, backgroundColor: "rgba(28,25,23,0.72)", alignItems: "center", justifyContent: "center", padding: 20 },
+alarmCard: { alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#b42318", padding: 24, width: "100%", gap: 8 },
+queueBadge: { backgroundColor: "#b42318", borderRadius: 4, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 8 },
   queueBadgeText: { color: "#fff", fontSize: 13, fontWeight: "800" },
-  alarmIcon: { width: 96, height: 96, borderRadius: 48, backgroundColor: "#dc2626", alignItems: "center", justifyContent: "center", marginBottom: 8, shadowColor: "#dc2626", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.6, shadowRadius: 24 },
-  alarmTitle: { color: "#f8fafc", fontSize: 32, fontWeight: "900", letterSpacing: -0.5 },
-  alarmFrom: { color: "#64748b", fontSize: 15, fontWeight: "600" },
-  alarmMessage: { color: "#f1f5f9", fontSize: 18, fontWeight: "700", lineHeight: 26, textAlign: "center", marginVertical: 12 },
-  ackButton: { alignItems: "center", backgroundColor: "#fbbf24", borderRadius: 12, flexDirection: "row", gap: 8, height: 54, justifyContent: "center", marginTop: 8, width: "100%" },
-  ackButtonText: { color: "#92400e", fontSize: 16, fontWeight: "900" }
+alarmIcon: { width: 70, height: 70, borderRadius: 6, backgroundColor: "#b42318", alignItems: "center", justifyContent: "center", marginBottom: 8, shadowColor: "transparent", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0 },
+alarmTitle: { color: "#1c1917", fontSize: 26, fontWeight: "900" },
+alarmFrom: { color: "#78716c", fontSize: 14, fontWeight: "600" },
+alarmMessage: { color: "#1c1917", fontSize: 17, fontWeight: "700", lineHeight: 24, textAlign: "center", marginVertical: 10 },
+ackButton: { alignItems: "center", backgroundColor: "#1c1917", borderRadius: 4, flexDirection: "row", gap: 8, height: 48, justifyContent: "center", marginTop: 8, width: "100%" },
+ackButtonText: { color: "#fafaf9", fontSize: 15, fontWeight: "800" },
+detailCard: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", gap: 14, maxHeight: "82%", padding: 18, width: "100%" },
+detailHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", gap: 12 },
+detailTitle: { color: "#1c1917", fontSize: 18, fontWeight: "900" },
+detailClose: { alignItems: "center", backgroundColor: "#f7f5ef", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, height: 36, justifyContent: "center", width: 36 },
+detailMessage: { color: "#1c1917", fontSize: 17, fontWeight: "800", lineHeight: 24 },
+detailBlock: { gap: 5 },
+detailLabel: { color: "#78716c", fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
+detailValue: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
+detailTargets: { maxHeight: 180 },
+detailTargetItem: { color: "#1c1917", fontSize: 15, fontWeight: "700", paddingVertical: 4 }
+});
+
+const darkStyles = StyleSheet.create({
+  ...lightStyles,
+  screen: { ...lightStyles.screen, backgroundColor: "#14120f" },
+  loadingText: { ...lightStyles.loadingText, color: "#a8a29e" },
+  heroIconWrap: { ...lightStyles.heroIconWrap, backgroundColor: "#fafaf9" },
+  heroTitle: { ...lightStyles.heroTitle, color: "#fafaf9" },
+  heroSub: { ...lightStyles.heroSub, color: "#a8a29e" },
+  card: { ...lightStyles.card, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
+  cardIconWrap: { ...lightStyles.cardIconWrap, backgroundColor: "#27231f" },
+  cardTitle: { ...lightStyles.cardTitle, color: "#fafaf9" },
+  input: { ...lightStyles.input, backgroundColor: "#181511", borderColor: "#3f3a34", color: "#fafaf9" },
+  primaryButton: { ...lightStyles.primaryButton, backgroundColor: "#fafaf9" },
+  primaryButtonText: { ...lightStyles.primaryButtonText, color: "#1c1917" },
+  secondaryButton: { ...lightStyles.secondaryButton, backgroundColor: "#27231f", borderColor: "#3f3a34" },
+  secondaryButtonText: { ...lightStyles.secondaryButtonText, color: "#fafaf9" },
+  dividerLine: { ...lightStyles.dividerLine, backgroundColor: "#3f3a34" },
+  dividerText: { ...lightStyles.dividerText, color: "#a8a29e" },
+  segmentTrack: { ...lightStyles.segmentTrack, backgroundColor: "#181511", borderColor: "#3f3a34" },
+  segmentIndicator: { ...lightStyles.segmentIndicator, backgroundColor: "#fafaf9" },
+  segmentLabel: { ...lightStyles.segmentLabel, color: "#a8a29e" },
+  segmentLabelActive: { ...lightStyles.segmentLabelActive, color: "#1c1917" },
+  teamRow: { ...lightStyles.teamRow, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
+  teamRowName: { ...lightStyles.teamRowName, color: "#fafaf9" },
+  teamRowMeta: { ...lightStyles.teamRowMeta, color: "#a8a29e" },
+  header: { ...lightStyles.header, backgroundColor: "#1c1917", borderBottomColor: "#3f3a34" },
+  backButton: { ...lightStyles.backButton, backgroundColor: "#181511", borderColor: "#3f3a34" },
+  headerKicker: { ...lightStyles.headerKicker, color: "#a8a29e" },
+  headerTitle: { ...lightStyles.headerTitle, color: "#fafaf9" },
+  codeBadge: { ...lightStyles.codeBadge, backgroundColor: "#181511", borderColor: "#3f3a34" },
+  codeLabel: { ...lightStyles.codeLabel, color: "#a8a29e" },
+  codeText: { ...lightStyles.codeText, color: "#fafaf9" },
+  sectionTitle: { ...lightStyles.sectionTitle, color: "#fafaf9" },
+  sectionMeta: { ...lightStyles.sectionMeta, color: "#a8a29e" },
+  debugPanel: { ...lightStyles.debugPanel, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
+  debugTitle: { ...lightStyles.debugTitle, color: "#fafaf9" },
+  debugHint: { ...lightStyles.debugHint, color: "#a8a29e" },
+  debugBody: { ...lightStyles.debugBody, borderTopColor: "#3f3a34" },
+  debugButton: { ...lightStyles.debugButton, backgroundColor: "#181511", borderColor: "#3f3a34" },
+  debugButtonText: { ...lightStyles.debugButtonText, color: "#fafaf9" },
+  memberRow: { ...lightStyles.memberRow, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
+  avatar: { ...lightStyles.avatar, backgroundColor: "#27231f" },
+  avatarBusy: { ...lightStyles.avatarBusy, backgroundColor: "#3a211e" },
+  avatarText: { ...lightStyles.avatarText, color: "#d6d3ca" },
+  memberName: { ...lightStyles.memberName, color: "#fafaf9" },
+  memberStatus: { ...lightStyles.memberStatus, color: "#84cc16" },
+  statusToggleAvailable: { ...lightStyles.statusToggleAvailable, backgroundColor: "#1c1917", borderColor: "#f87171" },
+  statusToggleBusy: { ...lightStyles.statusToggleBusy, backgroundColor: "#1c1917", borderColor: "#84cc16" },
+  statusToggleText: { ...lightStyles.statusToggleText, color: "#fafaf9" },
+  composerCard: { ...lightStyles.composerCard, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
+  inviteEmptyCard: { ...lightStyles.inviteEmptyCard, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
+  inviteEmptyTitle: { ...lightStyles.inviteEmptyTitle, color: "#fafaf9" },
+  inviteEmptyText: { ...lightStyles.inviteEmptyText, color: "#a8a29e" },
+  inviteCodeButton: { ...lightStyles.inviteCodeButton, backgroundColor: "#181511", borderColor: "#3f3a34" },
+  inviteCodeLabel: { ...lightStyles.inviteCodeLabel, color: "#fafaf9" },
+  chip: { ...lightStyles.chip, backgroundColor: "#181511", borderColor: "#3f3a34" },
+  chipSelected: { ...lightStyles.chipSelected, backgroundColor: "#fafaf9", borderColor: "#fafaf9" },
+  chipText: { ...lightStyles.chipText, color: "#d6d3ca" },
+  chipTextSelected: { ...lightStyles.chipTextSelected, color: "#1c1917" },
+  messageInput: { ...lightStyles.messageInput, backgroundColor: "#181511", borderColor: "#3f3a34", color: "#fafaf9" },
+  emptyText: { ...lightStyles.emptyText, color: "#a8a29e" },
+  historyLine: { ...lightStyles.historyLine, backgroundColor: "#3f3a34" },
+  historyMessage: { ...lightStyles.historyMessage, color: "#fafaf9" },
+  historyTime: { ...lightStyles.historyTime, color: "#a8a29e" },
+  historyMeta: { ...lightStyles.historyMeta, color: "#a8a29e" },
+  alarmCard: { ...lightStyles.alarmCard, backgroundColor: "#1c1917" },
+  alarmTitle: { ...lightStyles.alarmTitle, color: "#fafaf9" },
+  alarmFrom: { ...lightStyles.alarmFrom, color: "#a8a29e" },
+  alarmMessage: { ...lightStyles.alarmMessage, color: "#fafaf9" },
+  ackButton: { ...lightStyles.ackButton, backgroundColor: "#fafaf9" },
+  ackButtonText: { ...lightStyles.ackButtonText, color: "#1c1917" },
+  detailCard: { ...lightStyles.detailCard, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
+  detailTitle: { ...lightStyles.detailTitle, color: "#fafaf9" },
+  detailClose: { ...lightStyles.detailClose, backgroundColor: "#181511", borderColor: "#3f3a34" },
+  detailMessage: { ...lightStyles.detailMessage, color: "#fafaf9" },
+  detailLabel: { ...lightStyles.detailLabel, color: "#a8a29e" },
+  detailValue: { ...lightStyles.detailValue, color: "#fafaf9" },
+  detailTargetItem: { ...lightStyles.detailTargetItem, color: "#fafaf9" },
 });

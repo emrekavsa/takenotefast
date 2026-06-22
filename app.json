@@ -4,13 +4,12 @@
     "slug": "acil-ping",
     "version": "0.1.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.takenotefast.acilping",
       "infoPlist": {
         "UIBackgroundModes": [
-          "remote-notification",
           "remote-notification"
         ],
         "NSUserNotificationsUsageDescription": "Size acil uyarıları anında iletebilmek için bildirim iznine ihtiyacımız var.",

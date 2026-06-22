@@ -19,8 +19,8 @@ function generate(): string {
 export async function getDeviceId(): Promise<string> {
   try {
     if (Platform.OS === "android") {
-      // androidId: uygulamadan bağımsız, cihaza özgü, reinstall'da değişmez
-      const id = Application.androidId;
+      // Android ID: uygulama imzası + kullanıcı + cihaza bağlı, reinstall'da değişmez.
+      const id = Application.getAndroidId();
       if (id) return id;
     }
 
