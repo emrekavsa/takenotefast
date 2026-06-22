@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "AcilPing",
+    "slug": "acil-ping",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.takenotefast.acilping"
+    },
+    "android": {
+      "package": "com.takenotefast.acilping"
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}
