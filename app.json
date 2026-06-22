@@ -33,7 +33,6 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
           "color": "#dc2626"
         }
       ]
