@@ -104,8 +104,11 @@ const darkUi = {
   inactiveTabIcon: "#a8a29e",
 };
 
-function generateDeviceId() {
-  return `device_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+// Note: generateDeviceId is in lib/deviceId.ts — do not duplicate here
+
+/** Nickname sanitization: letters, numbers, spaces, hyphens, underscores (2-24 chars) */
+function isValidNickname(s: string): boolean {
+  return /^[\p{L}\p{N} _\-]{2,24}$/u.test(s.trim());
 }
 
 function makeTeamCode() {
@@ -130,16 +133,16 @@ return `multi:${JSON.stringify(targets)}`;
 }
 
 function parseAlertTargets(toTarget: string) {
-if (toTarget === "all") return { all: true, names: [] };
-if (!toTarget.startsWith("multi:")) return { all: false, names: [toTarget] };
-try {
-const names = JSON.parse(toTarget.slice(6));
-return Array.isArray(names)
-? { all: false, names: names.filter((name): name is string => typeof name === "string") }
-: { all: false, names: [toTarget] };
-} catch {
-return { all: false, names: [toTarget] };
-}
+  if (toTarget === "all") return { all: true, names: [] as string[] };
+  if (!toTarget.startsWith("multi:")) return { all: false, names: [toTarget] };
+  try {
+    const names = JSON.parse(toTarget.slice(6));
+    return Array.isArray(names)
+      ? { all: false, names: names.filter((name): name is string => typeof name === "string").slice(0, 50) }
+      : { all: false, names: [toTarget] };
+  } catch {
+    return { all: false, names: [toTarget] };
+  }
 }
 
 function isAlertForNickname(toTarget: string, nickname: string) {
@@ -156,12 +159,47 @@ return parsed.names.join(", ");
 function formatAlertTime(createdAt: string) {
 const date = new Date(createdAt);
 if (Number.isNaN(date.getTime())) return "";
+const locale = Localization.getLocales()[0];
 const uses24hourClock = Localization.getCalendars()[0]?.uses24hourClock;
-return new Intl.DateTimeFormat(undefined, {
+return new Intl.DateTimeFormat(locale?.languageTag, {
 hour: "numeric",
 minute: "2-digit",
 hour12: uses24hourClock === null ? undefined : !uses24hourClock
 }).format(date);
+}
+
+function formatAlertDateTime(createdAt: string) {
+const date = new Date(createdAt);
+if (Number.isNaN(date.getTime())) return "";
+
+const now = new Date();
+const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+const yesterday = new Date(today);
+yesterday.setDate(yesterday.getDate() - 1);
+const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const locale = Localization.getLocales()[0];
+
+let dateString = "";
+if (dateStart.getTime() === today.getTime()) {
+  dateString = i18n.t("today");
+} else if (dateStart.getTime() === yesterday.getTime()) {
+  dateString = i18n.t("yesterday");
+} else {
+  dateString = new Intl.DateTimeFormat(locale?.languageTag, {
+    day: "numeric",
+    month: "numeric",
+  }).format(date);
+}
+
+const uses24hourClock = Localization.getCalendars()[0]?.uses24hourClock;
+const timePart = new Intl.DateTimeFormat(locale?.languageTag, {
+hour: "numeric",
+minute: "2-digit",
+hour12: uses24hourClock === null ? undefined : !uses24hourClock
+}).format(date);
+
+return `${dateString} ${timePart}`;
 }
 
 // ─── Swipeable Team Row ──────────────────────────────────────────────────────
@@ -352,6 +390,7 @@ const copyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 const pulse = useRef(new Animated.Value(0)).current;
 const alarmSoundRef = useRef<Audio.Sound | null>(null);
 const previousBrightnessRef = useRef<number | null>(null);
+const ackInProgressRef = useRef(false);
 
 const realtimeCleanupRef = useRef<(() => void) | null>(null);
 const appStateRef = useRef<AppStateStatus>(AppState.currentState);
@@ -382,13 +421,8 @@ if (myMember) myStatusRef.current = myMember.status;
   useEffect(() => {
     getDeviceId().then((id) => {
       setDeviceId(id);
-      
-      // Request push token in background and update DB
-      registerForPushNotificationsAsync().then(async (token) => {
-        if (token && id) {
-          await supabase.from("members").update({ push_token: token }).eq("device_id", id);
-        }
-      }).catch(console.error);
+      // Push token is registered after member creation to avoid race condition.
+      // See createTeam() and joinTeam() for the correct registration point.
     });
 
     async function bootstrap() {
@@ -581,7 +615,7 @@ setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     try {
       const [{ data: membersData, error: mErr }, { data: alertsData, error: aErr }] =
         await Promise.all([
-          supabase.from("members").select("*").eq("team_id", teamId).order("created_at"),
+          supabase.from("members").select("id, team_id, nickname, status, device_id, created_at").eq("team_id", teamId).order("created_at"),
           supabase
             .from("alerts")
             .select("*")
@@ -634,11 +668,15 @@ if (alertsData) setAlerts(uniqueById(alertsData as DbAlert[]));
       Alert.alert(i18n.t("missingInfo"), i18n.t("teamNameRequired"));
       return;
     }
+    if (!isValidNickname(nick)) {
+      Alert.alert(i18n.t("missingInfo"), "Kullanıcı adı 2-24 karakter olmalı ve özel sembol içermemeli.");
+      return;
+    }
     setLoading(true);
     try {
       const { data: team, error: teamErr } = await supabase
         .from("teams")
-        .insert({ name, code: makeTeamCode() })
+        .insert({ name: name.slice(0, 40), code: makeTeamCode() })
         .select()
         .single();
       if (teamErr || !team) throw teamErr ?? new Error("Team oluşturulamadı");
@@ -650,12 +688,21 @@ if (alertsData) setAlerts(uniqueById(alertsData as DbAlert[]));
         .single();
       if (memberErr || !member) throw memberErr ?? new Error("Üye eklenemedi");
 
+      // Save push token now that member exists in DB
+      registerForPushNotificationsAsync().then(async (token) => {
+        if (token) {
+          try {
+            await supabase.from("members").update({ push_token: token }).eq("id", member.id);
+          } catch {}
+        }
+      }).catch(() => {});
+
       const localTeam: LocalTeam = { ...(team as DbTeam), myMemberId: member.id, myNickname: nick };
       setSavedTeams((prev) => [localTeam, ...prev]);
       setActiveTeamId(team.id);
       setTeamNameInput("");
       setNicknameInput("");
-setSelectedRecipientIds(["all"]);
+      setSelectedRecipientIds(["all"]);
       setMessage("");
     } catch (e: any) {
       Alert.alert(i18n.t("error"), e?.message ?? i18n.t("alertFailed"));
@@ -670,6 +717,10 @@ setSelectedRecipientIds(["all"]);
     const nick = nicknameInput.trim();
     if (code.length < 4 || !nick) {
       Alert.alert(i18n.t("missingInfo"), i18n.t("joinCodeRequired"));
+      return;
+    }
+    if (!isValidNickname(nick)) {
+      Alert.alert(i18n.t("missingInfo"), "Kullanıcı adı 2-24 karakter olmalı ve özel sembol içermemeli.");
       return;
     }
 
@@ -729,6 +780,14 @@ setSelectedRecipientIds(["all"]);
           .single();
         if (memberErr || !member) throw memberErr ?? new Error("Üye eklenemedi");
         memberId = member.id;
+        // Save push token now that member exists in DB
+        registerForPushNotificationsAsync().then(async (token) => {
+          if (token) {
+            try {
+              await supabase.from("members").update({ push_token: token }).eq("id", memberId);
+            } catch {}
+          }
+        }).catch(() => {});
       }
 
       const localTeam: LocalTeam = { ...(team as DbTeam), myMemberId: memberId, myNickname: nick };
@@ -739,7 +798,7 @@ setSelectedRecipientIds(["all"]);
       setActiveTeamId(team.id);
       setJoinCodeInput("");
       setNicknameInput("");
-setSelectedRecipientIds(["all"]);
+      setSelectedRecipientIds(["all"]);
       setMessage("");
     } catch (e: any) {
       Alert.alert(i18n.t("error"), e?.message ?? i18n.t("alertFailed"));
@@ -896,44 +955,17 @@ const displayTarget = selectedAll ? i18n.t("everyone") : targetNames.join(", ");
           onPress: async () => {
             try {
 const targetName = encodeAlertTarget(targetNames);
-const { data: insertedAlert, error } = await supabase.from("alerts").insert({
+const { error } = await supabase.from("alerts").insert({
 team_id: activeLocalTeam.id,
 from_nickname: myMember.nickname,
 to_target: targetName,
 message: trimmed,
 acknowledged: false
-}).select().single();
+});
 if (error) throw error;
 setMessage("");
-              
-              // Send native push notifications
-const pushMessages = [];
-for (const m of visibleMembers) {
-if (!m.push_token) continue;
-if (m.status === "busy") continue;
-if (selectedAll || targetNames.includes(m.nickname)) {
-                  pushMessages.push({
-                    to: m.push_token,
-                    sound: 'default',
-                    title: `AcilPing — ${myMember.nickname}`,
-body: trimmed,
-data: { teamId: activeLocalTeam.id, alertId: insertedAlert?.id },
-                  });
-                }
-              }
-              
-              if (pushMessages.length > 0) {
-                fetch('https://exp.host/--/api/v2/push/send', {
-                  method: 'POST',
-                  headers: {
-                    Accept: 'application/json',
-                    'Accept-encoding': 'gzip, deflate',
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify(pushMessages),
-                }).catch(console.error);
-              }
-              
+              // Push notifications are now sent server-side via DB trigger → Edge Function
+
             } catch {
               Alert.alert(i18n.t("error"), i18n.t("alertFailed"));
             }
@@ -943,11 +975,15 @@ data: { teamId: activeLocalTeam.id, alertId: insertedAlert?.id },
     );
   }
 
-  // Bug #4: Kuyruktaki ilk alarmı kapat, varsa bir sonrakine geç
-async function acknowledgeAlert() {
-if (!incomingAlert) return;
-void stopAlarmEffects();
-setAlertQueue((q) => q.slice(1));
+  // Kuyruktaki ilk alarmı kapat, varsa bir sonrakine geç
+  async function acknowledgeAlert() {
+    if (!incomingAlert) return;
+    // Debounce: prevent double-tap from firing twice
+    if (ackInProgressRef.current) return;
+    ackInProgressRef.current = true;
+
+    void stopAlarmEffects();
+    setAlertQueue((q) => q.slice(1));
 
     try {
       await supabase
@@ -959,6 +995,8 @@ setAlertQueue((q) => q.slice(1));
       );
     } catch {
       // Sessizce geç — kullanıcıyı bloke etme
+    } finally {
+      ackInProgressRef.current = false;
     }
   }
 
@@ -1206,41 +1244,44 @@ setAlertQueue((q) => q.slice(1));
         showsVerticalScrollIndicator={false}
 keyboardShouldPersistTaps="handled"
 >
-        <View style={styles.debugPanel}>
-          <Pressable
-            onPress={() => setDebugOpen((open) => !open)}
-            style={({ pressed }) => [styles.debugHeader, pressed && styles.buttonPressed]}
-          >
-            <View style={styles.debugHeaderText}>
-              <Text style={styles.debugTitle}>Debug</Text>
-              <Text style={styles.debugHint} numberOfLines={1}>
-                Test araçları
-              </Text>
-            </View>
-            <Ionicons name={debugOpen ? "chevron-up" : "chevron-down"} size={18} color={ui.mutedIcon} />
-          </Pressable>
+        {/* Debug panel — only visible in development builds */}
+        {__DEV__ && (
+          <View style={styles.debugPanel}>
+            <Pressable
+              onPress={() => setDebugOpen((open) => !open)}
+              style={({ pressed }) => [styles.debugHeader, pressed && styles.buttonPressed]}
+            >
+              <View style={styles.debugHeaderText}>
+                <Text style={styles.debugTitle}>Debug</Text>
+                <Text style={styles.debugHint} numberOfLines={1}>
+                  Test araçları
+                </Text>
+              </View>
+              <Ionicons name={debugOpen ? "chevron-up" : "chevron-down"} size={18} color={ui.mutedIcon} />
+            </Pressable>
 
-          {debugOpen && (
-            <View style={styles.debugBody}>
-              <Pressable
-                disabled={debugBusy}
-                onPress={addDebugMember}
-                style={({ pressed }) => [styles.debugButton, (pressed || debugBusy) && styles.buttonPressed]}
-              >
-                <Ionicons name="person-add-outline" size={17} color={ui.inviteIcon} />
-                <Text style={styles.debugButtonText}>Takıma test adamı ekle</Text>
-              </Pressable>
-              <Pressable
-                disabled={debugBusy}
-                onPress={sendDebugAlertToMe}
-                style={({ pressed }) => [styles.debugButton, (pressed || debugBusy) && styles.buttonPressed]}
-              >
-                <Ionicons name="send-outline" size={17} color={ui.inviteIcon} />
-                <Text style={styles.debugButtonText}>Kendime test alarmı gönder</Text>
-              </Pressable>
-            </View>
-          )}
-        </View>
+            {debugOpen && (
+              <View style={styles.debugBody}>
+                <Pressable
+                  disabled={debugBusy}
+                  onPress={addDebugMember}
+                  style={({ pressed }) => [styles.debugButton, (pressed || debugBusy) && styles.buttonPressed]}
+                >
+                  <Ionicons name="person-add-outline" size={17} color={ui.inviteIcon} />
+                  <Text style={styles.debugButtonText}>Takıma test adamı ekle</Text>
+                </Pressable>
+                <Pressable
+                  disabled={debugBusy}
+                  onPress={sendDebugAlertToMe}
+                  style={({ pressed }) => [styles.debugButton, (pressed || debugBusy) && styles.buttonPressed]}
+                >
+                  <Ionicons name="send-outline" size={17} color={ui.inviteIcon} />
+                  <Text style={styles.debugButtonText}>Kendime test alarmı gönder</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        )}
 
 {/* Members */}
 <View style={styles.section}>
@@ -1400,7 +1441,7 @@ style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
                 <View style={styles.historyInfo}>
                   <View style={styles.historyTopLine}>
                     <Text style={styles.historyMessage} numberOfLines={2}>{item.message}</Text>
-                    <Text style={styles.historyTime}>{formatAlertTime(item.created_at)}</Text>
+                    <Text style={styles.historyTime}>{formatAlertDateTime(item.created_at)}</Text>
                   </View>
                   <Text style={styles.historyMeta} numberOfLines={1}>
                     {item.from_nickname} → {formatAlertTarget(item.to_target, i18n.t("everyone"))}
@@ -1477,15 +1518,26 @@ style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
               {parseAlertTargets(selectedAlertDetail.to_target).all ? (
                 <Text style={styles.detailValue}>{i18n.t("everyone")}</Text>
               ) : (
-                parseAlertTargets(selectedAlertDetail.to_target).names.map((name, index) => (
-                  <Text key={`${name}-${index}`} style={styles.detailTargetItem}>{name}</Text>
-                ))
+                <Text style={styles.detailValue}>
+                  {parseAlertTargets(selectedAlertDetail.to_target).names.join(", ")}
+                </Text>
               )}
             </ScrollView>
           </View>
           <View style={styles.detailBlock}>
             <Text style={styles.detailLabel}>Durum</Text>
             <Text style={styles.detailValue}>{selectedAlertDetail.acknowledged ? "Kapatıldı" : "Aktif"}</Text>
+          </View>
+          <View style={styles.detailBlock}>
+            <Text style={styles.detailLabel}>Gönderilme Zamanı</Text>
+            <Text style={styles.detailValue}>
+              {(() => {
+                const d = new Date(selectedAlertDetail.created_at);
+                if (Number.isNaN(d.getTime())) return "—";
+                return d.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })
+                  + "  ·  " + formatAlertTime(selectedAlertDetail.created_at);
+              })()}
+            </Text>
           </View>
         </>
       )}

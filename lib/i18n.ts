@@ -10,6 +10,8 @@ const translations = {
     cancel: "Cancel",
     missingInfo: "Missing Info",
     notFound: "Not Found",
+    today: "Today",
+    yesterday: "Yesterday",
     
     // Home Screen
     appTitle: "AcilPing",
@@ -84,6 +86,8 @@ const translations = {
     cancel: "İptal",
     missingInfo: "Eksik Bilgi",
     notFound: "Bulunamadı",
+    today: "Bugün",
+    yesterday: "Dün",
     
     appTitle: "AcilPing",
     appSub: "Ekibini oluştur, kodla katıl, anında acil alarm gönder.",
@@ -153,6 +157,8 @@ const translations = {
     cancel: "Abbrechen",
     missingInfo: "Fehlende Info",
     notFound: "Nicht gefunden",
+    today: "Heute",
+    yesterday: "Gestern",
     
     appTitle: "AcilPing",
     appSub: "Team erstellen, per Code beitreten, sofort Alarme senden.",
@@ -222,6 +228,8 @@ const translations = {
     cancel: "Annuler",
     missingInfo: "Infos manquantes",
     notFound: "Introuvable",
+    today: "Aujourd'hui",
+    yesterday: "Hier",
     
     appTitle: "AcilPing",
     appSub: "Créez une équipe, rejoignez avec un code, envoyez des alertes.",
