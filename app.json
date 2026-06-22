@@ -7,19 +7,42 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.takenotefast.acilping"
+      "bundleIdentifier": "com.takenotefast.acilping",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification",
+          "remote-notification"
+        ],
+        "NSUserNotificationsUsageDescription": "Size acil uyarıları anında iletebilmek için bildirim iznine ihtiyacımız var.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "com.takenotefast.acilping"
+      "package": "com.takenotefast.acilping",
+      "useNextNotificationsApi": true,
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ]
     },
     "plugins": [
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      "expo-secure-store",
+      "expo-localization",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#dc2626"
+        }
+      ]
     ],
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "a6b1f6c8-da0a-4363-85db-f5e3d9a97f46"
       }
-    }
+    },
+    "owner": "mendak"
   }
 }
