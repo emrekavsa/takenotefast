@@ -1,9 +1,9 @@
+import "react-native-gesture-handler";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getDeviceId } from "./lib/deviceId";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
 import * as Notifications from "expo-notifications";
 import * as Localization from "expo-localization";
@@ -11,17 +11,17 @@ import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
 import * as Brightness from "expo-brightness";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { registerForPushNotificationsAsync } from "./lib/pushNotifications";
+import { SwipeableTeamRow } from "./components/SwipeableTeamRow";
 import {
   ActivityIndicator,
   Alert,
   Animated,
   AppState,
   AppStateStatus,
-  Dimensions,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -33,6 +33,7 @@ import {
   View
 } from "react-native";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { type DbAlert, type DbMember, type DbTeam, supabase } from "./lib/supabase";
 import i18n from "./lib/i18n";
@@ -202,167 +203,17 @@ hour12: uses24hourClock === null ? undefined : !uses24hourClock
 return `${dateString} ${timePart}`;
 }
 
-// ─── Swipeable Team Row ──────────────────────────────────────────────────────
-
-function SwipeableTeamRow({
-  team,
-onPress,
-onLeave,
-colors,
-styles,
-isDark
-}: {
-team: LocalTeam;
-onPress: () => void;
-onLeave: (team: LocalTeam, onCancel: () => void) => void;
-colors: { bg: string; icon: string };
-styles: typeof lightStyles;
-isDark: boolean;
-}) {
-  const pan = useRef(new Animated.ValueXY()).current;
-  const screenWidth = Dimensions.get("window").width;
-  const triggerThreshold = -80; // Threshold on RAW gesture movement (not visual)
-  const hasTriggeredHaptic = useRef(false);
-  const isCanceled = useRef(false);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onMoveShouldSetPanResponder: (evt, gestureState) => {
-          // Prevent capturing vertical scrolls. Must be mostly horizontal.
-          return gestureState.dx < -10 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 2;
-        },
-        onPanResponderGrant: () => {
-          hasTriggeredHaptic.current = false;
-          isCanceled.current = false;
-        },
-        onPanResponderMove: (evt, gestureState) => {
-          if (isCanceled.current) return;
-
-          if (Math.abs(gestureState.dy) > 30 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 0.6) {
-            isCanceled.current = true;
-            hasTriggeredHaptic.current = false;
-            Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
-            return;
-          }
-
-          let rawX = gestureState.dx;
-          if (rawX > 0) rawX = 0;
-
-          // WhatsApp style friction: after -60px, it gets harder to pull
-          let visualX = rawX > -60 ? rawX : -60 + (rawX + 60) * 0.35;
-
-          // Provide haptic tick when raw movement reaches threshold
-          if (rawX <= triggerThreshold && !hasTriggeredHaptic.current) {
-            hasTriggeredHaptic.current = true;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          } else if (rawX > triggerThreshold) {
-            hasTriggeredHaptic.current = false;
-          }
-
-          pan.setValue({ x: visualX, y: 0 });
-        },
-        onPanResponderRelease: (evt, gestureState) => {
-          if (isCanceled.current) return;
-
-          // WhatsApp style: ALWAYS spring back immediately upon release
-          Animated.spring(pan, { 
-            toValue: { x: 0, y: 0 }, 
-            friction: 6, // bouncy spring back
-            useNativeDriver: true 
-          }).start();
-
-          // If they pulled far enough, trigger the action
-          if (gestureState.dx <= triggerThreshold) {
-            onLeave(team, () => {}); // onCancel is a no-op since it already sprang back
-          }
-        },
-        onPanResponderTerminate: (evt, gestureState) => {
-          hasTriggeredHaptic.current = false;
-          isCanceled.current = false;
-          Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
-        }
-      }),
-    [team.id]
-  );
-
-  useEffect(() => {
-    pan.setValue({ x: 0, y: 0 });
-    hasTriggeredHaptic.current = false;
-  }, [team.id]);
-
-  const bgColor = pan.x.interpolate({
-    inputRange: [-80, -60, 0],
-outputRange: ["#b42318", "#7f1d1d", isDark ? "#3f3a34" : "#ddd6c8"],
-    extrapolate: "clamp"
-  });
-
-  const bgOpacity = pan.x.interpolate({
-    inputRange: [-60, -30],
-    outputRange: [1, 0],
-    extrapolate: "clamp"
-  });
-
-  const bgScale = pan.x.interpolate({
-    inputRange: [-100, -80, -60],
-    outputRange: [1.2, 1.2, 0.8],
-    extrapolate: "clamp"
-  });
-
-  return (
-  <View style={{ position: "relative", marginBottom: 8, borderRadius: 4, overflow: "hidden", backgroundColor: isDark ? "#27231f" : "#f1eee7" }}>
-      <Animated.View
-        style={{
-          position: "absolute",
-          right: 0,
-          top: 0,
-          bottom: 0,
-          left: 0,
-          backgroundColor: bgColor,
-          justifyContent: "center",
-          alignItems: "flex-end",
-          paddingRight: 30
-        }}
-      >
-        <Animated.View style={{ opacity: bgOpacity, transform: [{ scale: bgScale }] }}>
-          <Ionicons name="trash" size={24} color="#fff" />
-        </Animated.View>
-      </Animated.View>
-      <Animated.View
-        style={{ transform: pan.getTranslateTransform() }}
-        {...panResponder.panHandlers}
-      >
-        <Pressable
-          onPress={onPress}
-          style={({ pressed }) => [styles.teamRow, { marginBottom: 0 }, pressed && styles.buttonPressed]}
-        >
-          <View style={[styles.teamRowIcon, { backgroundColor: colors.bg }]}>
-            <Ionicons name="people" size={18} color={colors.icon} />
-          </View>
-          <View style={styles.teamRowInfo}>
-            <Text style={styles.teamRowName} numberOfLines={1}>
-              {team.name}
-            </Text>
-            <Text style={styles.teamRowMeta} numberOfLines={1}>
-              {team.myNickname} · {i18n.t("teamCode", { code: team.code })}
-            </Text>
-          </View>
-        <Ionicons name="chevron-forward" size={18} color={isDark ? "#78716c" : "#a8a29e"} />
-        </Pressable>
-      </Animated.View>
-    </View>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // APP
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <MainApp />
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <MainApp />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -385,7 +236,8 @@ const [statusToggleLocked, setStatusToggleLocked] = useState(false);
   const [message, setMessage] = useState("");
 const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>(["all"]);
 const [selectedAlertDetail, setSelectedAlertDetail] = useState<DbAlert | null>(null);
-const [codeCopied, setCodeCopied] = useState(false);
+const [copiedTeamId, setCopiedTeamId] = useState<string | null>(null);
+const [teamSwipeActive, setTeamSwipeActive] = useState(false);
 const copyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 const pulse = useRef(new Animated.Value(0)).current;
 const alarmSoundRef = useRef<Audio.Sound | null>(null);
@@ -397,6 +249,7 @@ const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 const myStatusRef = useRef<DbMember["status"]>("available");
 
 const activeLocalTeam = savedTeams.find((t) => t.id === activeTeamId) ?? null;
+const codeCopied = activeLocalTeam ? copiedTeamId === activeLocalTeam.id : false;
 const visibleMembers = uniqueById(members);
 const visibleAlerts = uniqueById(alerts);
 const myMember = visibleMembers.find((m) => m.id === activeLocalTeam?.myMemberId) ?? null;
@@ -510,19 +363,31 @@ void stopAlarmEffects();
 }, [incomingAlert?.id, startAlarmEffects, stopAlarmEffects]);
 
 useEffect(() => {
-return () => {
-if (copyTimeout.current) clearTimeout(copyTimeout.current);
-void stopAlarmEffects();
-};
+  return () => {
+    if (copyTimeout.current) clearTimeout(copyTimeout.current);
+    void stopAlarmEffects();
+  };
 }, [stopAlarmEffects]);
 
 useEffect(() => {
-const sub = AppState.addEventListener("change", (nextState: AppStateStatus) => {
-      const wasBackground =
-        appStateRef.current === "background" || appStateRef.current === "inactive";
-      const isNowActive = nextState === "active";
+  if (copyTimeout.current) {
+    clearTimeout(copyTimeout.current);
+    copyTimeout.current = null;
+  }
+  setCopiedTeamId(null);
+}, [activeTeamId]);
 
-      if (wasBackground && isNowActive && activeTeamId && activeLocalTeam) {
+useEffect(() => {
+Notifications.dismissAllNotificationsAsync().catch(() => {});
+const sub = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+const wasBackground =
+appStateRef.current === "background" || appStateRef.current === "inactive";
+const isNowActive = nextState === "active";
+if (isNowActive) {
+Notifications.dismissAllNotificationsAsync().catch(() => {});
+}
+
+if (wasBackground && isNowActive && activeTeamId && activeLocalTeam) {
         realtimeCleanupRef.current?.();
         startRealtime(activeTeamId, activeLocalTeam.myMemberId).then((fn) => {
           realtimeCleanupRef.current = fn;
@@ -829,23 +694,29 @@ if (alertsData) setAlerts(uniqueById(alertsData as DbAlert[]));
     );
   }
 
-  function goHome() {
-    realtimeCleanupRef.current?.();
-    realtimeCleanupRef.current = null;
-    setActiveTeamId(null);
-    setMembers([]);
-    setAlerts([]);
-    setAlertQueue([]);
-    setMessage("");
-setSelectedRecipientIds(["all"]);
-  }
+function goHome() {
+  realtimeCleanupRef.current?.();
+  realtimeCleanupRef.current = null;
+  setActiveTeamId(null);
+  setTeamSwipeActive(false);
+  setMembers([]);
+  setAlerts([]);
+  setAlertQueue([]);
+  setMessage("");
+  setSelectedRecipientIds(["all"]);
+  setCopiedTeamId(null);
+}
 
 function copyCode() {
-if (!activeLocalTeam) return;
-Clipboard.setString(activeLocalTeam.code);
-setCodeCopied(true);
+  if (!activeLocalTeam) return;
+  const teamId = activeLocalTeam.id;
+  Clipboard.setString(activeLocalTeam.code);
+setCopiedTeamId(teamId);
 if (copyTimeout.current) clearTimeout(copyTimeout.current);
-copyTimeout.current = setTimeout(() => setCodeCopied(false), 2000);
+copyTimeout.current = setTimeout(() => {
+setCopiedTeamId((current) => (current === teamId ? null : current));
+copyTimeout.current = null;
+}, 2000);
 }
 
 async function addDebugMember() {
@@ -1006,19 +877,23 @@ setMessage("");
   const [nicknameInput, setNicknameInput] = useState("");
 
   // ── Segmented tab (0 = Oluştur, 1 = Katıl) ──
-  const [homeTab, setHomeTab] = useState(0);
-  const tabAnim = useRef(new Animated.Value(0)).current;
+const [homeTab, setHomeTab] = useState(0);
+const [segmentWidth, setSegmentWidth] = useState(0);
+const tabAnim = useRef(new Animated.Value(0)).current;
+const segmentIndicatorWidth = segmentWidth > 8 ? (segmentWidth - 8) / 2 : 0;
 
-  function switchTab(index: number) {
-    setHomeTab(index);
-    setNicknameInput("");
-    Animated.spring(tabAnim, {
-      toValue: index,
-      useNativeDriver: false,
-      speed: 20,
-      bounciness: 4
-    }).start();
-  }
+function switchTab(index: number) {
+if (index === homeTab) return;
+tabAnim.stopAnimation();
+setHomeTab(index);
+setNicknameInput("");
+Animated.timing(tabAnim, {
+toValue: index,
+useNativeDriver: true,
+duration: 150,
+easing: Easing.out(Easing.cubic)
+}).start();
+}
 
   // ─── Bootstrap tamamlanana kadar bekle ──────────────────────────────────────
 
@@ -1042,23 +917,15 @@ setMessage("");
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.authLayout}
         >
-          <ScrollView
-            contentContainerStyle={[
-              styles.authScroll,
-              { paddingTop: Math.max(insets.top, 10), paddingBottom: Math.max(insets.bottom, 40) }
+<ScrollView
+scrollEnabled={!teamSwipeActive}
+contentContainerStyle={[
+styles.authScroll,
+{ paddingTop: Math.max(insets.top, 10), paddingBottom: Math.max(insets.bottom, 40) }
             ]}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
-            {/* Hero */}
-            <View style={styles.hero}>
-              <View style={styles.heroIconWrap}>
-                <Ionicons name="radio" size={36} color="#fff" />
-              </View>
-              <Text style={styles.heroTitle}>{i18n.t("appTitle")}</Text>
-              <Text style={styles.heroSub}>{i18n.t("appSub")}</Text>
-            </View>
-
             {/* Takımlarım */}
             {savedTeams.length > 0 && (
               <View style={styles.section}>
@@ -1072,11 +939,15 @@ setMessage("");
                     <SwipeableTeamRow
                       key={t.id}
                       team={t}
-                      onPress={() => setActiveTeamId(t.id)}
+                      onPress={() => {
+                        setTeamSwipeActive(false);
+                        setActiveTeamId(t.id);
+                      }}
                       onLeave={leaveTeam}
                       colors={colors}
                       styles={styles}
                       isDark={isDark}
+                      onSwipeActiveChange={setTeamSwipeActive}
                     />
                   );
                 })}
@@ -1086,16 +957,24 @@ setMessage("");
             {/* Segmented kart */}
             <View style={styles.card}>
               {/* Tab bar */}
-              <View style={styles.segmentTrack}>
+              <View
+                style={styles.segmentTrack}
+                onLayout={(event) => setSegmentWidth(event.nativeEvent.layout.width)}
+              >
                 {/* Sliding indicator */}
                 <Animated.View
                   style={[
                     styles.segmentIndicator,
                     {
-                      left: tabAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: ["2%", "51%"]
-                      })
+                      width: segmentIndicatorWidth,
+                      transform: [
+                        {
+                          translateX: tabAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, segmentIndicatorWidth]
+                          })
+                        }
+                      ]
                     }
                   ]}
                 />
@@ -1154,7 +1033,7 @@ setMessage("");
                       <ActivityIndicator color={isDark ? "#1c1917" : "#fff"} />
                     ) : (
                       <>
-                        <Ionicons name="add-circle-outline" size={20} color="#fff" />
+                        <Ionicons name="add-circle-outline" size={20} color={isDark ? "#1c1917" : "#fff"} />
                         <Text style={styles.primaryButtonText}>{i18n.t("createTeamBtn")}</Text>
                       </>
                     )}
@@ -1195,7 +1074,7 @@ setMessage("");
                       <ActivityIndicator color={isDark ? "#fafaf9" : "#1c1917"} />
                     ) : (
                       <>
-                        <Ionicons name="enter" size={20} color="#92400e" />
+                        <Ionicons name="enter" size={20} color={isDark ? "#fafaf9" : "#1c1917"} />
                         <Text style={styles.secondaryButtonText}>{i18n.t("joinTeamBtn")}</Text>
                       </>
                     )}
@@ -1499,47 +1378,34 @@ style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
 <Modal animationType="fade" transparent visible={Boolean(selectedAlertDetail)}>
   <View style={styles.modalBackdrop}>
     <View style={styles.detailCard}>
-      <View style={styles.detailHeader}>
-        <Text style={styles.detailTitle}>Alarm detayı</Text>
-        <Pressable onPress={() => setSelectedAlertDetail(null)} style={({ pressed }) => [styles.detailClose, pressed && styles.buttonPressed]}>
-          <Ionicons name="close" size={20} color={ui.inviteIcon} />
-        </Pressable>
-      </View>
+      <Pressable onPress={() => setSelectedAlertDetail(null)} style={({ pressed }) => [styles.detailClose, pressed && styles.buttonPressed]}>
+        <Ionicons name="close" size={20} color={ui.inviteIcon} />
+      </Pressable>
       {selectedAlertDetail && (
-        <>
+        (() => {
+          const targets = parseAlertTargets(selectedAlertDetail.to_target);
+          const targetNames = targets.all ? [i18n.t("everyone")] : targets.names;
+
+          return (
+            <>
           <Text style={styles.detailMessage}>{selectedAlertDetail.message}</Text>
-          <View style={styles.detailBlock}>
-            <Text style={styles.detailLabel}>Gönderen</Text>
-            <Text style={styles.detailValue}>{selectedAlertDetail.from_nickname}</Text>
-          </View>
-          <View style={styles.detailBlock}>
-            <Text style={styles.detailLabel}>Alıcılar</Text>
-            <ScrollView style={styles.detailTargets} nestedScrollEnabled>
-              {parseAlertTargets(selectedAlertDetail.to_target).all ? (
-                <Text style={styles.detailValue}>{i18n.t("everyone")}</Text>
-              ) : (
-                <Text style={styles.detailValue}>
-                  {parseAlertTargets(selectedAlertDetail.to_target).names.join(", ")}
+              <View style={styles.detailDivider} />
+              <View style={styles.detailBlock}>
+                <Text style={styles.detailLabel}>Gönderen</Text>
+                <Text style={styles.detailValue}>{selectedAlertDetail.from_nickname}</Text>
+              </View>
+              <View style={styles.detailDivider} />
+              <View style={styles.detailBlock}>
+                <Text style={styles.detailLabel}>Alıcılar</Text>
+                <Text style={styles.detailTargetItem}>
+                  {targetNames.join(", ")}
                 </Text>
-              )}
-            </ScrollView>
-          </View>
-          <View style={styles.detailBlock}>
-            <Text style={styles.detailLabel}>Durum</Text>
-            <Text style={styles.detailValue}>{selectedAlertDetail.acknowledged ? "Kapatıldı" : "Aktif"}</Text>
-          </View>
-          <View style={styles.detailBlock}>
-            <Text style={styles.detailLabel}>Gönderilme Zamanı</Text>
-            <Text style={styles.detailValue}>
-              {(() => {
-                const d = new Date(selectedAlertDetail.created_at);
-                if (Number.isNaN(d.getTime())) return "—";
-                return d.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })
-                  + "  ·  " + formatAlertTime(selectedAlertDetail.created_at);
-              })()}
-            </Text>
-          </View>
-        </>
+              </View>
+              <View style={styles.detailDivider} />
+              <Text style={styles.detailTime}>Gönderildi: {formatAlertDateTime(selectedAlertDetail.created_at)}</Text>
+            </>
+          );
+        })()
       )}
     </View>
   </View>
@@ -1559,16 +1425,6 @@ loadingText: { color: "#78716c", fontSize: 15 },
 
   authLayout: { flex: 1 },
 authScroll: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 40, gap: 14 },
-hero: { alignItems: "flex-start", paddingTop: 8, paddingBottom: 10, gap: 6 },
-  heroIconWrap: {
-width: 42, height: 42, borderRadius: 6, backgroundColor: "#1c1917",
-    alignItems: "center", justifyContent: "center", marginBottom: 4,
-shadowColor: "transparent", shadowOffset: { width: 0, height: 0 },
-shadowOpacity: 0, shadowRadius: 0
-  },
-heroTitle: { fontSize: 30, fontWeight: "800", color: "#1c1917" },
-heroSub: { fontSize: 14, color: "#78716c", lineHeight: 20, maxWidth: 340 },
-
 card: { backgroundColor: "#fffdf8", borderRadius: 6, padding: 14, gap: 10, borderWidth: 1, borderColor: "#ddd6c8" },
   cardHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 4 },
 cardIconWrap: { width: 32, height: 32, borderRadius: 4, backgroundColor: "#f1eee7", alignItems: "center", justifyContent: "center" },
@@ -1596,10 +1452,10 @@ borderRadius: 6,
 borderColor: "#ddd6c8"
   },
   segmentIndicator: {
-    position: "absolute",
-    top: 4,
-    bottom: 4,
-    width: "47%",
+position: "absolute",
+left: 4,
+top: 4,
+bottom: 4,
 backgroundColor: "#1c1917",
 borderRadius: 4,
 shadowColor: "transparent",
@@ -1709,25 +1565,24 @@ alarmFrom: { color: "#78716c", fontSize: 14, fontWeight: "600" },
 alarmMessage: { color: "#1c1917", fontSize: 17, fontWeight: "700", lineHeight: 24, textAlign: "center", marginVertical: 10 },
 ackButton: { alignItems: "center", backgroundColor: "#1c1917", borderRadius: 4, flexDirection: "row", gap: 8, height: 48, justifyContent: "center", marginTop: 8, width: "100%" },
 ackButtonText: { color: "#fafaf9", fontSize: 15, fontWeight: "800" },
-detailCard: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", gap: 14, maxHeight: "82%", padding: 18, width: "100%" },
-detailHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", gap: 12 },
+detailCard: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", gap: 10, maxHeight: "82%", padding: 18, position: "relative", width: "100%" },
+detailHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", gap: 12, marginBottom: -4 },
 detailTitle: { color: "#1c1917", fontSize: 18, fontWeight: "900" },
-detailClose: { alignItems: "center", backgroundColor: "#f7f5ef", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, height: 36, justifyContent: "center", width: 36 },
-detailMessage: { color: "#1c1917", fontSize: 17, fontWeight: "800", lineHeight: 24 },
-detailBlock: { gap: 5 },
+detailClose: { alignItems: "center", backgroundColor: "#f7f5ef", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, height: 32, justifyContent: "center", position: "absolute", right: 10, top: 10, width: 32, zIndex: 2 },
+detailMessage: { color: "#1c1917", fontSize: 18, fontWeight: "800", lineHeight: 25, paddingRight: 34 },
+detailMeta: { color: "#57534e", fontSize: 15, fontWeight: "700", lineHeight: 21 },
+detailTime: { color: "#78716c", fontSize: 13, fontWeight: "700" },
+detailDivider: { backgroundColor: "#ddd6c8", height: 1, marginVertical: 4 },
+detailBlock: { gap: 8 },
 detailLabel: { color: "#78716c", fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
 detailValue: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
-detailTargets: { maxHeight: 180 },
-detailTargetItem: { color: "#1c1917", fontSize: 15, fontWeight: "700", paddingVertical: 4 }
+detailTargetItem: { color: "#1c1917", fontSize: 15, fontWeight: "700", lineHeight: 22 }
 });
 
 const darkStyles = StyleSheet.create({
   ...lightStyles,
   screen: { ...lightStyles.screen, backgroundColor: "#14120f" },
   loadingText: { ...lightStyles.loadingText, color: "#a8a29e" },
-  heroIconWrap: { ...lightStyles.heroIconWrap, backgroundColor: "#fafaf9" },
-  heroTitle: { ...lightStyles.heroTitle, color: "#fafaf9" },
-  heroSub: { ...lightStyles.heroSub, color: "#a8a29e" },
   card: { ...lightStyles.card, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
   cardIconWrap: { ...lightStyles.cardIconWrap, backgroundColor: "#27231f" },
   cardTitle: { ...lightStyles.cardTitle, color: "#fafaf9" },
@@ -1793,9 +1648,12 @@ const darkStyles = StyleSheet.create({
   ackButtonText: { ...lightStyles.ackButtonText, color: "#1c1917" },
   detailCard: { ...lightStyles.detailCard, backgroundColor: "#1c1917", borderColor: "#3f3a34" },
   detailTitle: { ...lightStyles.detailTitle, color: "#fafaf9" },
-  detailClose: { ...lightStyles.detailClose, backgroundColor: "#181511", borderColor: "#3f3a34" },
-  detailMessage: { ...lightStyles.detailMessage, color: "#fafaf9" },
-  detailLabel: { ...lightStyles.detailLabel, color: "#a8a29e" },
-  detailValue: { ...lightStyles.detailValue, color: "#fafaf9" },
-  detailTargetItem: { ...lightStyles.detailTargetItem, color: "#fafaf9" },
+detailClose: { ...lightStyles.detailClose, backgroundColor: "#181511", borderColor: "#3f3a34" },
+detailMessage: { ...lightStyles.detailMessage, color: "#fafaf9" },
+detailMeta: { ...lightStyles.detailMeta, color: "#d6d3ca" },
+detailTime: { ...lightStyles.detailTime, color: "#a8a29e" },
+detailDivider: { ...lightStyles.detailDivider, backgroundColor: "#3f3a34" },
+detailLabel: { ...lightStyles.detailLabel, color: "#a8a29e" },
+detailValue: { ...lightStyles.detailValue, color: "#fafaf9" },
+detailTargetItem: { ...lightStyles.detailTargetItem, color: "#fafaf9" },
 });

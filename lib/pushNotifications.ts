@@ -5,11 +5,11 @@ import { Platform } from 'react-native';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
+    shouldShowAlert: false,
+    shouldShowBanner: false,
+    shouldShowList: false,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
   }),
 });
 
@@ -18,6 +18,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     await Notifications.setNotificationChannelAsync('default', {
       name: 'default',
       importance: Notifications.AndroidImportance.MAX,
+      sound: 'alarm.wav',
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#FF231F7C',
     });

@@ -32,7 +32,11 @@
       [
         "expo-notifications",
         {
-          "color": "#dc2626"
+          "color": "#dc2626",
+          "defaultChannel": "default",
+          "sounds": [
+            "./assets/alarm.wav"
+          ]
         }
       ]
     ],
