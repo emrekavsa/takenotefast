@@ -32,6 +32,7 @@ const translations = {
     teamCreated: "Team created successfully.",
     joinCodeRequired: "Team code and nickname are required.",
     teamNotFound: "No team found with this code.",
+    nicknameTaken: "This nickname is already taken in this team. Please choose a different one.",
     alreadyMemberTitle: "Already a Member",
     alreadyMemberMsg: "You are already registered to '%{team}'.",
     enterTeam: "Enter Team",
@@ -56,12 +57,15 @@ const translations = {
     sendAlertTitle: "Send Urgent Alert",
     selectTarget: "Select Target:",
     everyone: "Everyone",
+    alertTitlePlaceholder: "Alert Title",
+    alertBodyPlaceholder: "Detailed description...",
     alertMessagePlaceholder: "Enter urgent message...",
     sendBtn: "Send Alert",
-    messageRequiredTitle: "Message Required",
-    messageRequiredMsg: "Please write a message to send an alert.",
+    messageRequiredTitle: "Missing Info",
+    messageRequiredMsg: "Please write a title and message to send an alert.",
+    titleRequiredMsg: "Please write a title for the alert.",
     confirmAlertTitle: "Send Alert?",
-    confirmAlertMsg: "'%{message}'\n\nTarget: %{target}",
+    confirmAlertMsg: "'%{title}'\n%{message}\n\nTarget: %{target}",
     yesSend: "Yes, Send",
     alertFailed: "Could not send alert. Please check your connection.",
     
@@ -77,7 +81,11 @@ const translations = {
     historyCount: "%{count} alert(s)",
     noAlerts: "No alerts sent yet.",
     received: "✓ Received",
-    sent: "Sent"
+    sent: "Sent",
+    
+    // Detail Modal
+    detailAlertTitle: "Title",
+    detailBody: "Content"
   },
   tr: {
     loading: "Yükleniyor...",
@@ -107,6 +115,7 @@ const translations = {
     teamCreated: "Takım başarıyla oluşturuldu.",
     joinCodeRequired: "Takım kodu ve kullanıcı adın gerekli.",
     teamNotFound: "Bu koda sahip bir takım bulunamadı.",
+    nicknameTaken: "Bu kullanıcı adı bu takımda zaten kullanılıyor. Farklı bir ad seç.",
     alreadyMemberTitle: "Zaten Üyesin",
     alreadyMemberMsg: "'%{team}' takımına zaten kayıtlısın.",
     enterTeam: "Takıma Gir",
@@ -129,12 +138,15 @@ const translations = {
     sendAlertTitle: "Acil Alarm Gönder",
     selectTarget: "Kime:",
     everyone: "Herkes",
+    alertTitlePlaceholder: "Alarm Başlığı",
+    alertBodyPlaceholder: "Detaylı açıklama...",
     alertMessagePlaceholder: "Acil durumu buraya yazın...",
     sendBtn: "Alarm Gönder",
-    messageRequiredTitle: "Mesaj gerekli",
-    messageRequiredMsg: "Alarm göndermek için bir mesaj yaz.",
+    messageRequiredTitle: "Eksik Bilgi",
+    messageRequiredMsg: "Alarm göndermek için başlık ve mesaj yaz.",
+    titleRequiredMsg: "Alarm için bir başlık yaz.",
     confirmAlertTitle: "Alarm Gönderilsin mi?",
-    confirmAlertMsg: "'%{message}'\n\nAlıcı: %{target}",
+    confirmAlertMsg: "'%{title}'\n%{message}\n\nAlıcı: %{target}",
     yesSend: "Evet, Gönder",
     alertFailed: "Alarm gönderilemedi. İnternet bağlantınızı kontrol edin.",
     
@@ -148,7 +160,10 @@ const translations = {
     historyCount: "%{count} alarm",
     noAlerts: "Henüz alarm gönderilmedi.",
     received: "✓ Aldı",
-    sent: "Gönderildi"
+    sent: "Gönderildi",
+    
+    detailAlertTitle: "Başlık",
+    detailBody: "İçerik"
   },
   de: {
     loading: "Wird geladen...",
@@ -178,6 +193,7 @@ const translations = {
     teamCreated: "Team erfolgreich erstellt.",
     joinCodeRequired: "Team-Code und Spitzname sind erforderlich.",
     teamNotFound: "Kein Team mit diesem Code gefunden.",
+    nicknameTaken: "Dieser Spitzname ist in diesem Team bereits vergeben. Bitte wähle einen anderen.",
     alreadyMemberTitle: "Bereits Mitglied",
     alreadyMemberMsg: "Du bist bereits im Team '%{team}' registriert.",
     enterTeam: "Team betreten",
@@ -200,12 +216,15 @@ const translations = {
     sendAlertTitle: "Dringenden Alarm senden",
     selectTarget: "Ziel:",
     everyone: "Alle",
+    alertTitlePlaceholder: "Alarm-Titel",
+    alertBodyPlaceholder: "Detaillierte Beschreibung...",
     alertMessagePlaceholder: "Dringende Nachricht hier eingeben...",
     sendBtn: "Alarm senden",
-    messageRequiredTitle: "Nachricht erforderlich",
-    messageRequiredMsg: "Bitte schreibe eine Nachricht für den Alarm.",
+    messageRequiredTitle: "Fehlende Info",
+    messageRequiredMsg: "Bitte schreibe einen Titel und eine Nachricht.",
+    titleRequiredMsg: "Bitte schreibe einen Titel für den Alarm.",
     confirmAlertTitle: "Alarm senden?",
-    confirmAlertMsg: "'%{message}'\n\nZiel: %{target}",
+    confirmAlertMsg: "'%{title}'\n%{message}\n\nZiel: %{target}",
     yesSend: "Ja, senden",
     alertFailed: "Alarm konnte nicht gesendet werden. Bitte Verbindung prüfen.",
     
@@ -219,7 +238,10 @@ const translations = {
     historyCount: "%{count} Alarm(e)",
     noAlerts: "Noch keine Alarme gesendet.",
     received: "✓ Empfangen",
-    sent: "Gesendet"
+    sent: "Gesendet",
+    
+    detailAlertTitle: "Titel",
+    detailBody: "Inhalt"
   },
   fr: {
     loading: "Chargement...",
@@ -249,6 +271,7 @@ const translations = {
     teamCreated: "Équipe créée avec succès.",
     joinCodeRequired: "Le code d'équipe et le pseudo sont requis.",
     teamNotFound: "Aucune équipe trouvée avec ce code.",
+    nicknameTaken: "Ce pseudo est déjà utilisé dans cette équipe. Veuillez en choisir un autre.",
     alreadyMemberTitle: "Déjà membre",
     alreadyMemberMsg: "Vous êtes déjà inscrit dans '%{team}'.",
     enterTeam: "Entrer",
@@ -271,12 +294,15 @@ const translations = {
     sendAlertTitle: "Envoyer une Alerte",
     selectTarget: "Pour:",
     everyone: "Tous",
+    alertTitlePlaceholder: "Titre de l'alerte",
+    alertBodyPlaceholder: "Description détaillée...",
     alertMessagePlaceholder: "Entrez le message urgent...",
     sendBtn: "Envoyer l'alerte",
-    messageRequiredTitle: "Message Requis",
-    messageRequiredMsg: "Veuillez écrire un message pour l'alerte.",
+    messageRequiredTitle: "Infos manquantes",
+    messageRequiredMsg: "Veuillez écrire un titre et un message.",
+    titleRequiredMsg: "Veuillez écrire un titre pour l'alerte.",
     confirmAlertTitle: "Envoyer l'alerte ?",
-    confirmAlertMsg: "'%{message}'\n\nPour: %{target}",
+    confirmAlertMsg: "'%{title}'\n%{message}\n\nPour: %{target}",
     yesSend: "Oui, envoyer",
     alertFailed: "Échec de l'envoi de l'alerte. Vérifiez votre connexion.",
     
@@ -290,7 +316,10 @@ const translations = {
     historyCount: "%{count} alerte(s)",
     noAlerts: "Aucune alerte envoyée.",
     received: "✓ Reçu",
-    sent: "Envoyé"
+    sent: "Envoyé",
+    
+    detailAlertTitle: "Titre",
+    detailBody: "Contenu"
   }
 };
 

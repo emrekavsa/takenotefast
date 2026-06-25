@@ -52,16 +52,16 @@ const SAVED_TEAMS_KEY = "@acilping/saved_teams";
 const ALARM_KEEP_AWAKE_TAG = "acilping-active-alarm";
 
 const TEAM_COLORS = [
-  { bg: "#f1eee7", icon: "#4b5563" },
-  { bg: "#ece7dc", icon: "#525252" },
-  { bg: "#f5f1e9", icon: "#57534e" },
-  { bg: "#eee9df", icon: "#44403c" },
-  { bg: "#f7f3ea", icon: "#3f3f46" },
-  { bg: "#e9e4d8", icon: "#52525b" },
-  { bg: "#f3eee4", icon: "#57534e" },
-  { bg: "#ebe6dc", icon: "#44403c" },
-  { bg: "#f4efe6", icon: "#3f3f46" },
-  { bg: "#eee7da", icon: "#525252" },
+  { bg: "#f0f0f0", icon: "#4b5563" },
+  { bg: "#ebebeb", icon: "#525252" },
+  { bg: "#f2f2f2", icon: "#525252" },
+  { bg: "#e8e8e8", icon: "#404040" },
+  { bg: "#f4f4f4", icon: "#3f3f46" },
+  { bg: "#e6e6e6", icon: "#52525b" },
+  { bg: "#f1f1f1", icon: "#525252" },
+  { bg: "#e9e9e9", icon: "#404040" },
+  { bg: "#f3f3f3", icon: "#3f3f46" },
+  { bg: "#ececec", icon: "#525252" },
 ];
 
 const DARK_TEAM_COLORS = [
@@ -89,11 +89,11 @@ return palette[index];
 
 const lightUi = {
   spinner: "#1c1917",
-  placeholder: "#a8a29e",
-  mutedIcon: "#a8a29e",
-  inviteIcon: "#57534e",
-  activeTabIcon: "#fafaf9",
-  inactiveTabIcon: "#78716c",
+  placeholder: "#a3a3a3",
+  mutedIcon: "#a3a3a3",
+  inviteIcon: "#525252",
+  activeTabIcon: "#ffffff",
+  inactiveTabIcon: "#737373",
 };
 
 const darkUi = {
@@ -233,6 +233,7 @@ const [loading, setLoading] = useState(false);
 const [debugOpen, setDebugOpen] = useState(false);
 const [debugBusy, setDebugBusy] = useState(false);
 const [statusToggleLocked, setStatusToggleLocked] = useState(false);
+  const [titleInput, setTitleInput] = useState("");
   const [message, setMessage] = useState("");
 const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>(["all"]);
 const [selectedAlertDetail, setSelectedAlertDetail] = useState<DbAlert | null>(null);
@@ -567,10 +568,12 @@ if (alertsData) setAlerts(uniqueById(alertsData as DbAlert[]));
       setActiveTeamId(team.id);
       setTeamNameInput("");
       setNicknameInput("");
+      setTitleInput("");
       setSelectedRecipientIds(["all"]);
       setMessage("");
     } catch (e: any) {
-      Alert.alert(i18n.t("error"), e?.message ?? i18n.t("alertFailed"));
+      const msg = e?.code === "23505" ? i18n.t("nicknameTaken") : (e?.message ?? i18n.t("alertFailed"));
+      Alert.alert(i18n.t("error"), msg);
     } finally {
       setLoading(false);
     }
@@ -663,10 +666,12 @@ if (alertsData) setAlerts(uniqueById(alertsData as DbAlert[]));
       setActiveTeamId(team.id);
       setJoinCodeInput("");
       setNicknameInput("");
+      setTitleInput("");
       setSelectedRecipientIds(["all"]);
       setMessage("");
     } catch (e: any) {
-      Alert.alert(i18n.t("error"), e?.message ?? i18n.t("alertFailed"));
+      const msg = e?.code === "23505" ? i18n.t("nicknameTaken") : (e?.message ?? i18n.t("alertFailed"));
+      Alert.alert(i18n.t("error"), msg);
     } finally {
       setLoading(false);
     }
@@ -702,6 +707,7 @@ function goHome() {
   setMembers([]);
   setAlerts([]);
   setAlertQueue([]);
+  setTitleInput("");
   setMessage("");
   setSelectedRecipientIds(["all"]);
   setCopiedTeamId(null);
@@ -749,11 +755,13 @@ async function sendDebugAlertToMe() {
 if (!activeLocalTeam || !myMember || debugBusy) return;
 setDebugBusy(true);
 try {
+const title = titleInput.trim() || "Debug Test";
 const text = message.trim() || "Debug test alarmı";
 const { error } = await supabase.from("alerts").insert({
 team_id: activeLocalTeam.id,
 from_nickname: "Debug",
 to_target: myMember.nickname,
+title,
 message: text,
 acknowledged: false
 });
@@ -803,8 +811,13 @@ myStatusRef.current = oldStatus;
 
   function sendAlert() {
     if (!activeLocalTeam || !myMember) return;
-    const trimmed = message.trim();
-    if (!trimmed) {
+    const trimmedTitle = titleInput.trim();
+    const trimmedMsg = message.trim();
+    if (!trimmedTitle) {
+      Alert.alert(i18n.t("messageRequiredTitle"), i18n.t("titleRequiredMsg"));
+      return;
+    }
+    if (!trimmedMsg) {
       Alert.alert(i18n.t("messageRequiredTitle"), i18n.t("messageRequiredMsg"));
       return;
     }
@@ -817,7 +830,7 @@ const displayTarget = selectedAll ? i18n.t("everyone") : targetNames.join(", ");
     
     Alert.alert(
       i18n.t("confirmAlertTitle"),
-      i18n.t("confirmAlertMsg", { message: trimmed, target: displayTarget }),
+      i18n.t("confirmAlertMsg", { title: trimmedTitle, message: trimmedMsg, target: displayTarget }),
       [
         { text: i18n.t("cancel"), style: "cancel" },
         {
@@ -830,10 +843,12 @@ const { error } = await supabase.from("alerts").insert({
 team_id: activeLocalTeam.id,
 from_nickname: myMember.nickname,
 to_target: targetName,
-message: trimmed,
+title: trimmedTitle,
+message: trimmedMsg,
 acknowledged: false
 });
 if (error) throw error;
+setTitleInput("");
 setMessage("");
               // Push notifications are now sent server-side via DB trigger → Edge Function
 
@@ -1271,13 +1286,21 @@ return (
             />
             )}
             <TextInput
+            onChangeText={setTitleInput}
+            placeholder={i18n.t("alertTitlePlaceholder")}
+            placeholderTextColor={ui.placeholder}
+            style={styles.input}
+            value={titleInput}
+            maxLength={100}
+          />
+            <TextInput
             multiline
             onChangeText={setMessage}
-            placeholder={i18n.t("alertMessagePlaceholder")}
+            placeholder={i18n.t("alertBodyPlaceholder")}
             placeholderTextColor={ui.placeholder}
             style={styles.messageInput}
             value={message}
-            maxLength={300}
+            maxLength={500}
           />
           <Pressable
             onPress={sendAlert}
@@ -1319,7 +1342,7 @@ style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
                 </View>
                 <View style={styles.historyInfo}>
                   <View style={styles.historyTopLine}>
-                    <Text style={styles.historyMessage} numberOfLines={2}>{item.message}</Text>
+                    <Text style={styles.historyMessage} numberOfLines={1}>{item.title || item.message}</Text>
                     <Text style={styles.historyTime}>{formatAlertDateTime(item.created_at)}</Text>
                   </View>
                   <Text style={styles.historyMeta} numberOfLines={1}>
@@ -1361,7 +1384,10 @@ style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
             </View>
             <Text style={styles.alarmTitle}>{i18n.t("incomingAlert")}</Text>
             <Text style={styles.alarmFrom}>{i18n.t("from", { name: incomingAlert?.from_nickname })}</Text>
-            <Text style={styles.alarmMessage}>{incomingAlert?.message}</Text>
+            {incomingAlert?.title ? (
+              <Text style={styles.alarmMessage}>{incomingAlert.title}</Text>
+            ) : null}
+            <Text style={[styles.alarmFrom, { fontSize: 15 }]}>{incomingAlert?.message}</Text>
             <Pressable
               onPress={acknowledgeAlert}
               style={({ pressed }) => [styles.ackButton, pressed && styles.buttonPressed]}
@@ -1388,21 +1414,24 @@ style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
 
           return (
             <>
-          <Text style={styles.detailMessage}>{selectedAlertDetail.message}</Text>
+              <Text style={styles.detailMessage}>{selectedAlertDetail.title || selectedAlertDetail.message}</Text>
+              {selectedAlertDetail.title ? (
+                <Text style={styles.detailMeta}>{selectedAlertDetail.message}</Text>
+              ) : null}
               <View style={styles.detailDivider} />
               <View style={styles.detailBlock}>
-                <Text style={styles.detailLabel}>Gönderen</Text>
+                <Text style={styles.detailLabel}>{i18n.t("from", { name: "" }).replace(": ", "").trim()}</Text>
                 <Text style={styles.detailValue}>{selectedAlertDetail.from_nickname}</Text>
               </View>
               <View style={styles.detailDivider} />
               <View style={styles.detailBlock}>
-                <Text style={styles.detailLabel}>Alıcılar</Text>
+                <Text style={styles.detailLabel}>{targetNames.length > 1 ? i18n.t("selectTarget") : i18n.t("selectTarget")}</Text>
                 <Text style={styles.detailTargetItem}>
                   {targetNames.join(", ")}
                 </Text>
               </View>
               <View style={styles.detailDivider} />
-              <Text style={styles.detailTime}>Gönderildi: {formatAlertDateTime(selectedAlertDetail.created_at)}</Text>
+              <Text style={styles.detailTime}>{formatAlertDateTime(selectedAlertDetail.created_at)}</Text>
             </>
           );
         })()
@@ -1419,37 +1448,37 @@ style={({ pressed }) => [styles.historyRow, pressed && styles.buttonPressed]}
 // ─────────────────────────────────────────────────────────────────────────────
 
 const lightStyles = StyleSheet.create({
-screen: { flex: 1, backgroundColor: "#f7f5ef" },
+screen: { flex: 1, backgroundColor: "#f5f5f5" },
   center: { alignItems: "center", justifyContent: "center", gap: 12 },
-loadingText: { color: "#78716c", fontSize: 15 },
+loadingText: { color: "#737373", fontSize: 15 },
 
   authLayout: { flex: 1 },
 authScroll: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 40, gap: 14 },
-card: { backgroundColor: "#fffdf8", borderRadius: 6, padding: 14, gap: 10, borderWidth: 1, borderColor: "#ddd6c8" },
+card: { backgroundColor: "#ffffff", borderRadius: 6, padding: 14, gap: 10, borderWidth: 1, borderColor: "#e0e0e0" },
   cardHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 4 },
-cardIconWrap: { width: 32, height: 32, borderRadius: 4, backgroundColor: "#f1eee7", alignItems: "center", justifyContent: "center" },
+cardIconWrap: { width: 32, height: 32, borderRadius: 4, backgroundColor: "#f0f0f0", alignItems: "center", justifyContent: "center" },
 cardTitle: { fontSize: 17, fontWeight: "700", color: "#1c1917" },
-input: { backgroundColor: "#fffefb", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, color: "#1c1917", fontSize: 15, height: 46, paddingHorizontal: 12 },
+input: { backgroundColor: "#ffffff", borderColor: "#d4d4d4", borderRadius: 4, borderWidth: 1, color: "#1c1917", fontSize: 15, height: 46, paddingHorizontal: 12 },
 primaryButton: { alignItems: "center", backgroundColor: "#1c1917", borderRadius: 4, flexDirection: "row", gap: 8, height: 46, justifyContent: "center", shadowColor: "transparent", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0 },
-primaryButtonText: { color: "#fafaf9", fontSize: 15, fontWeight: "700" },
-secondaryButton: { alignItems: "center", backgroundColor: "#e7e0d3", borderRadius: 4, borderWidth: 1, borderColor: "#d6d3ca", flexDirection: "row", gap: 8, height: 46, justifyContent: "center" },
+primaryButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "700" },
+secondaryButton: { alignItems: "center", backgroundColor: "#e5e5e5", borderRadius: 4, borderWidth: 1, borderColor: "#d4d4d4", flexDirection: "row", gap: 8, height: 46, justifyContent: "center" },
 secondaryButtonText: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
 buttonPressed: { opacity: 0.7 },
   divider: { flexDirection: "row", alignItems: "center", gap: 12, marginVertical: 4 },
-dividerLine: { flex: 1, height: 1, backgroundColor: "#ddd6c8" },
-dividerText: { color: "#78716c", fontSize: 13, fontWeight: "600" },
+dividerLine: { flex: 1, height: 1, backgroundColor: "#e0e0e0" },
+dividerText: { color: "#737373", fontSize: 13, fontWeight: "600" },
 
   // ── Segment tab ──
   segmentTrack: {
     flexDirection: "row",
-backgroundColor: "#f1eee7",
+backgroundColor: "#f0f0f0",
 borderRadius: 6,
     padding: 4,
     position: "relative",
     height: 52,
     marginBottom: 8,
     borderWidth: 1,
-borderColor: "#ddd6c8"
+borderColor: "#e0e0e0"
   },
   segmentIndicator: {
 position: "absolute",
@@ -1475,25 +1504,25 @@ borderRadius: 4
   segmentLabel: {
     fontSize: 15,
     fontWeight: "700",
-color: "#78716c"
+color: "#737373"
   },
   segmentLabelActive: {
-color: "#fafaf9"
+color: "#ffffff"
   },
 
-teamRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 4, borderWidth: 1, borderColor: "#ddd6c8", padding: 12, gap: 10 },
+teamRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#ffffff", borderRadius: 4, borderWidth: 1, borderColor: "#e0e0e0", padding: 12, gap: 10 },
 teamRowIcon: { width: 34, height: 34, borderRadius: 4, alignItems: "center", justifyContent: "center" },
   teamRowInfo: { flex: 1, overflow: "hidden" },
 teamRowName: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
-teamRowMeta: { color: "#78716c", fontSize: 13, marginTop: 2 },
+teamRowMeta: { color: "#737373", fontSize: 13, marginTop: 2 },
 
-header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#ddd6c8", gap: 10, backgroundColor: "#fffdf8" },
-backButton: { width: 38, height: 38, borderRadius: 4, backgroundColor: "#f7f5ef", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#ddd6c8" },
+header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#e0e0e0", gap: 10, backgroundColor: "#ffffff" },
+backButton: { width: 38, height: 38, borderRadius: 4, backgroundColor: "#f5f5f5", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#e0e0e0" },
   headerCenter: { flex: 1, overflow: "hidden" },
-headerKicker: { color: "#78716c", fontSize: 11, fontWeight: "700", textTransform: "uppercase" },
+headerKicker: { color: "#737373", fontSize: 11, fontWeight: "700", textTransform: "uppercase" },
 headerTitle: { color: "#1c1917", fontSize: 19, fontWeight: "800" },
-codeBadge: { backgroundColor: "#fffdf8", borderRadius: 4, paddingHorizontal: 10, paddingVertical: 7, alignItems: "center", borderWidth: 1, borderColor: "#d6d3ca", minWidth: 86 },
-codeLabel: { color: "#78716c", fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
+codeBadge: { backgroundColor: "#ffffff", borderRadius: 4, paddingHorizontal: 10, paddingVertical: 7, alignItems: "center", borderWidth: 1, borderColor: "#d4d4d4", minWidth: 86 },
+codeLabel: { color: "#737373", fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
 codeText: { color: "#1c1917", fontSize: 15, fontWeight: "800", letterSpacing: 1 },
 
   scrollView: { flex: 1 },
@@ -1501,80 +1530,80 @@ content: { gap: 16, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
 section: { gap: 10 },
 sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 2 },
 sectionTitle: { color: "#1c1917", fontSize: 16, fontWeight: "800" },
-sectionMeta: { color: "#78716c", fontSize: 13, fontWeight: "600" },
+sectionMeta: { color: "#737373", fontSize: 13, fontWeight: "600" },
 
-debugPanel: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", overflow: "hidden" },
+debugPanel: { backgroundColor: "#ffffff", borderRadius: 6, borderWidth: 1, borderColor: "#e0e0e0", overflow: "hidden" },
 debugHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 10 },
 debugHeaderText: { flex: 1, gap: 2 },
 debugTitle: { color: "#1c1917", fontSize: 15, fontWeight: "800" },
-debugHint: { color: "#78716c", fontSize: 12, fontWeight: "600" },
-debugBody: { borderTopWidth: 1, borderTopColor: "#ddd6c8", gap: 8, padding: 10 },
-debugButton: { alignItems: "center", backgroundColor: "#f7f5ef", borderRadius: 4, borderWidth: 1, borderColor: "#d6d3ca", flexDirection: "row", gap: 8, minHeight: 40, paddingHorizontal: 10 },
+debugHint: { color: "#737373", fontSize: 12, fontWeight: "600" },
+debugBody: { borderTopWidth: 1, borderTopColor: "#e0e0e0", gap: 8, padding: 10 },
+debugButton: { alignItems: "center", backgroundColor: "#f5f5f5", borderRadius: 4, borderWidth: 1, borderColor: "#d4d4d4", flexDirection: "row", gap: 8, minHeight: 40, paddingHorizontal: 10 },
 debugButtonText: { color: "#1c1917", flex: 1, fontSize: 14, fontWeight: "700" },
 
-memberRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 4, borderWidth: 1, borderColor: "#ddd6c8", padding: 12, gap: 10 },
-avatar: { width: 36, height: 36, borderRadius: 4, backgroundColor: "#f1eee7", alignItems: "center", justifyContent: "center" },
-avatarBusy: { backgroundColor: "#f3e6e3" },
-avatarText: { color: "#44403c", fontSize: 16, fontWeight: "800" },
+memberRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#ffffff", borderRadius: 4, borderWidth: 1, borderColor: "#e0e0e0", padding: 12, gap: 10 },
+avatar: { width: 36, height: 36, borderRadius: 4, backgroundColor: "#f0f0f0", alignItems: "center", justifyContent: "center" },
+avatarBusy: { backgroundColor: "#fee2e2" },
+avatarText: { color: "#404040", fontSize: 16, fontWeight: "800" },
 avatarTextBusy: { color: "#b42318" },
   memberInfo: { flex: 1, overflow: "hidden" },
 memberName: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
 memberStatus: { color: "#4d7c0f", fontSize: 13, marginTop: 2, fontWeight: "600" },
 memberStatusBusy: { color: "#b42318" },
 statusToggle: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4, borderWidth: 1 },
-statusToggleAvailable: { backgroundColor: "#fffdf8", borderColor: "#b42318" },
-statusToggleBusy: { backgroundColor: "#fffdf8", borderColor: "#4d7c0f" },
+statusToggleAvailable: { backgroundColor: "#ffffff", borderColor: "#b42318" },
+statusToggleBusy: { backgroundColor: "#ffffff", borderColor: "#4d7c0f" },
 statusToggleText: { color: "#1c1917", fontSize: 12, fontWeight: "700" },
 
-composerCard: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", padding: 14, gap: 12 },
-inviteEmptyCard: { alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", gap: 8, padding: 18 },
+composerCard: { backgroundColor: "#ffffff", borderRadius: 6, borderWidth: 1, borderColor: "#e0e0e0", padding: 14, gap: 12 },
+inviteEmptyCard: { alignItems: "center", backgroundColor: "#ffffff", borderRadius: 6, borderWidth: 1, borderColor: "#e0e0e0", gap: 8, padding: 18 },
 inviteEmptyTitle: { color: "#1c1917", fontSize: 16, fontWeight: "800", textAlign: "center" },
-inviteEmptyText: { color: "#78716c", fontSize: 14, fontWeight: "600", lineHeight: 20, textAlign: "center" },
-inviteCodeButton: { backgroundColor: "#f7f5ef", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, marginTop: 4, paddingHorizontal: 12, paddingVertical: 9 },
+inviteEmptyText: { color: "#737373", fontSize: 14, fontWeight: "600", lineHeight: 20, textAlign: "center" },
+inviteCodeButton: { backgroundColor: "#f5f5f5", borderColor: "#d4d4d4", borderRadius: 4, borderWidth: 1, marginTop: 4, paddingHorizontal: 12, paddingVertical: 9 },
 inviteCodeLabel: { color: "#1c1917", fontSize: 14, fontWeight: "800" },
   chipList: { marginHorizontal: -4 },
-chip: { backgroundColor: "#fffefb", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, marginHorizontal: 4, paddingHorizontal: 12, paddingVertical: 7, maxWidth: 140 },
+chip: { backgroundColor: "#ffffff", borderColor: "#d4d4d4", borderRadius: 4, borderWidth: 1, marginHorizontal: 4, paddingHorizontal: 12, paddingVertical: 7, maxWidth: 140 },
 chipSelected: { backgroundColor: "#1c1917", borderColor: "#1c1917" },
-chipText: { color: "#57534e", fontSize: 14, fontWeight: "700" },
-chipTextSelected: { color: "#fafaf9" },
-messageInput: { backgroundColor: "#fffefb", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, color: "#1c1917", fontSize: 15, minHeight: 86, padding: 12, textAlignVertical: "top" },
+chipText: { color: "#525252", fontSize: 14, fontWeight: "700" },
+chipTextSelected: { color: "#ffffff" },
+messageInput: { backgroundColor: "#ffffff", borderColor: "#d4d4d4", borderRadius: 4, borderWidth: 1, color: "#1c1917", fontSize: 15, minHeight: 86, padding: 12, textAlignVertical: "top" },
 dangerButton: { alignItems: "center", backgroundColor: "#b42318", borderRadius: 4, flexDirection: "row", gap: 8, height: 48, justifyContent: "center", shadowColor: "transparent", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0 },
-dangerButtonText: { color: "#fffdf8", fontSize: 15, fontWeight: "800", flexShrink: 1 },
+dangerButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "800", flexShrink: 1 },
 
   emptyState: { alignItems: "center", gap: 8, padding: 24 },
-emptyText: { color: "#78716c", fontSize: 14, fontWeight: "600" },
+emptyText: { color: "#737373", fontSize: 14, fontWeight: "600" },
   historyRow: { flexDirection: "row", alignItems: "stretch", gap: 12, minHeight: 54 },
   historyTimeline: { alignItems: "center", width: 14 },
   historyDot: { width: 10, height: 10, borderRadius: 5, marginTop: 5 },
-historyLine: { flex: 1, width: 1, backgroundColor: "#ddd6c8", marginTop: 7 },
+historyLine: { flex: 1, width: 1, backgroundColor: "#e0e0e0", marginTop: 7 },
 historyDotPending: { backgroundColor: "#b42318" },
 historyDotAck: { backgroundColor: "#4d7c0f" },
 historyInfo: { flex: 1, gap: 4, paddingBottom: 16 },
 historyTopLine: { alignItems: "flex-start", flexDirection: "row", gap: 10, justifyContent: "space-between" },
 historyMessage: { color: "#1c1917", flex: 1, fontSize: 15, fontWeight: "700" },
-historyTime: { color: "#78716c", fontSize: 12, fontWeight: "700", marginTop: 2 },
-historyMeta: { color: "#78716c", fontSize: 13 },
+historyTime: { color: "#737373", fontSize: 12, fontWeight: "700", marginTop: 2 },
+historyMeta: { color: "#737373", fontSize: 13 },
 
-modalBackdrop: { flex: 1, backgroundColor: "rgba(28,25,23,0.72)", alignItems: "center", justifyContent: "center", padding: 20 },
-alarmCard: { alignItems: "center", backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#b42318", padding: 24, width: "100%", gap: 8 },
+modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", padding: 20 },
+alarmCard: { alignItems: "center", backgroundColor: "#ffffff", borderRadius: 6, borderWidth: 1, borderColor: "#b42318", padding: 24, width: "100%", gap: 8 },
 queueBadge: { backgroundColor: "#b42318", borderRadius: 4, paddingHorizontal: 10, paddingVertical: 4, marginBottom: 8 },
   queueBadgeText: { color: "#fff", fontSize: 13, fontWeight: "800" },
 alarmIcon: { width: 70, height: 70, borderRadius: 6, backgroundColor: "#b42318", alignItems: "center", justifyContent: "center", marginBottom: 8, shadowColor: "transparent", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0 },
 alarmTitle: { color: "#1c1917", fontSize: 26, fontWeight: "900" },
-alarmFrom: { color: "#78716c", fontSize: 14, fontWeight: "600" },
+alarmFrom: { color: "#737373", fontSize: 14, fontWeight: "600" },
 alarmMessage: { color: "#1c1917", fontSize: 17, fontWeight: "700", lineHeight: 24, textAlign: "center", marginVertical: 10 },
 ackButton: { alignItems: "center", backgroundColor: "#1c1917", borderRadius: 4, flexDirection: "row", gap: 8, height: 48, justifyContent: "center", marginTop: 8, width: "100%" },
-ackButtonText: { color: "#fafaf9", fontSize: 15, fontWeight: "800" },
-detailCard: { backgroundColor: "#fffdf8", borderRadius: 6, borderWidth: 1, borderColor: "#ddd6c8", gap: 10, maxHeight: "82%", padding: 18, position: "relative", width: "100%" },
+ackButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "800" },
+detailCard: { backgroundColor: "#ffffff", borderRadius: 6, borderWidth: 1, borderColor: "#e0e0e0", gap: 10, maxHeight: "82%", padding: 18, position: "relative", width: "100%" },
 detailHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", gap: 12, marginBottom: -4 },
 detailTitle: { color: "#1c1917", fontSize: 18, fontWeight: "900" },
-detailClose: { alignItems: "center", backgroundColor: "#f7f5ef", borderColor: "#d6d3ca", borderRadius: 4, borderWidth: 1, height: 32, justifyContent: "center", position: "absolute", right: 10, top: 10, width: 32, zIndex: 2 },
+detailClose: { alignItems: "center", backgroundColor: "#f5f5f5", borderColor: "#d4d4d4", borderRadius: 4, borderWidth: 1, height: 32, justifyContent: "center", position: "absolute", right: 10, top: 10, width: 32, zIndex: 2 },
 detailMessage: { color: "#1c1917", fontSize: 18, fontWeight: "800", lineHeight: 25, paddingRight: 34 },
-detailMeta: { color: "#57534e", fontSize: 15, fontWeight: "700", lineHeight: 21 },
-detailTime: { color: "#78716c", fontSize: 13, fontWeight: "700" },
-detailDivider: { backgroundColor: "#ddd6c8", height: 1, marginVertical: 4 },
+detailMeta: { color: "#525252", fontSize: 15, fontWeight: "700", lineHeight: 21 },
+detailTime: { color: "#737373", fontSize: 13, fontWeight: "700" },
+detailDivider: { backgroundColor: "#e0e0e0", height: 1, marginVertical: 4 },
 detailBlock: { gap: 8 },
-detailLabel: { color: "#78716c", fontSize: 12, fontWeight: "800", textTransform: "uppercase" },
+detailLabel: { color: "#737373", fontSize: 12, fontWeight: "800" },
 detailValue: { color: "#1c1917", fontSize: 15, fontWeight: "700" },
 detailTargetItem: { color: "#1c1917", fontSize: 15, fontWeight: "700", lineHeight: 22 }
 });

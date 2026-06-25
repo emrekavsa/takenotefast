@@ -36,6 +36,7 @@ export type DbAlert = {
   team_id: string;
   from_nickname: string;
   to_target: string;
+  title: string;
   message: string;
   acknowledged: boolean;
   created_at: string;
